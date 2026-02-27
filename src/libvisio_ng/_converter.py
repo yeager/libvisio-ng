@@ -3810,6 +3810,10 @@ def extract_all_text(input_path: str) -> str:
         return "\n".join(text_lines)
 
     if ext in (".vsd", ".vss", ".vst"):
+        text = _extract_text_vsd(input_path)
+        if text:
+            return text
+        # Fall back to libvisio
         tool = find_vsd2xhtml()
         if tool:
             try:
@@ -3857,22 +3861,20 @@ def convert_vsd_to_svg(input_path: str, output_dir: str | None = None) -> list[s
         if svg_files:
             return svg_files
 
+    # For .vsd binary files, try native parser first
+    if ext in (".vsd", ".vss", ".vst"):
+        svg_files = _vsd_to_svg(input_path, output_dir)
+        if svg_files:
+            return svg_files
+
+    # Fall back to libvisio (C++)
     svg_files = _convert_with_libvisio(input_path, output_dir)
     if svg_files:
         return svg_files
 
-    if ext in (".vsd", ".vss", ".vst"):
-        raise RuntimeError(
-            _("Cannot open %s files without libvisio. Install it:\n"
-              "  Ubuntu/Debian: sudo apt install libvisio-tools\n"
-              "  Fedora: sudo dnf install libvisio-tools\n"
-              "  macOS: brew install libvisio") % ext
-        )
-
     raise RuntimeError(
         _("Could not parse the Visio file. "
-          "The file may be corrupt or unsupported.\n"
-          "For best results, install libvisio-tools.")
+          "The file may be corrupt or unsupported.")
     )
 
 
@@ -4006,3 +4008,67 @@ def export_to_pdf(svg_path: str, output_path: str) -> str:
             _("cairosvg is required for PDF export. Install it:\n"
               "  pip install cairosvg")
         )
+
+
+# ---------------------------------------------------------------------------
+# Native .vsd binary format support
+# ---------------------------------------------------------------------------
+
+def _vsd_to_svg(input_path: str, output_dir: str) -> list[str]:
+    """Parse .vsd (binary) and generate SVG using the native parser.
+
+    Uses _vsd_parser to read the OLE2 file and the existing _shapes_to_svg
+    renderer to produce SVG output.
+    """
+    from libvisio_ng._vsd_parser import parse_vsd_to_dicts
+
+    os.makedirs(output_dir, exist_ok=True)
+    basename = Path(input_path).stem
+    svg_files = []
+
+    try:
+        pages = parse_vsd_to_dicts(input_path)
+    except Exception:
+        return []
+
+    for i, page_data in enumerate(pages):
+        shapes = page_data["shapes"]
+        if not shapes:
+            continue
+
+        page_w = page_data["page_width"]
+        page_h = page_data["page_height"]
+
+        svg_content = _shapes_to_svg(
+            shapes, page_w, page_h,
+            masters={}, connects=None,
+            media={}, page_rels={},
+            bg_shapes=None, bg_connects=None,
+            output_dir=output_dir,
+            theme_colors={}, layers={})
+        svg_path = os.path.join(output_dir, f"{basename}_page{i + 1}.svg")
+        with open(svg_path, "w", encoding="utf-8") as f:
+            f.write(svg_content)
+        svg_files.append(svg_path)
+
+    return svg_files
+
+
+def _extract_text_vsd(input_path: str) -> str:
+    """Extract text from a .vsd file using the native parser."""
+    from libvisio_ng._vsd_parser import parse_vsd_file
+
+    try:
+        doc = parse_vsd_file(input_path)
+    except Exception:
+        return ""
+
+    text_lines = []
+    for i, page in enumerate(doc.pages):
+        text_lines.append(f"--- {page.name or f'Page {i+1}'} ---")
+        for shape in page.shapes:
+            if shape.text:
+                text_lines.append(shape.text)
+        text_lines.append("")
+
+    return "\n".join(text_lines)

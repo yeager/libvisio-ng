@@ -5,25 +5,29 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "libvisio-ng"
 version = "0.1.0"
-description = "A Python library for parsing Microsoft Visio files (.vsdx, .vsd)"
+description = "A Python library for parsing Microsoft Visio files (.vsdx, .vsd) — native support for both XML and binary formats"
 readme = "README.md"
-license = "GPL-3.0-or-later"
+license = {text = "GPL-3.0-or-later"}
 authors = [
     {name = "Daniel Nylander", email = "daniel@danielnylander.se"}
 ]
 requires-python = ">=3.10"
-keywords = ["visio", "vsdx", "vsd", "svg", "converter", "parser"]
+keywords = ["visio", "vsdx", "vsd", "svg", "converter", "parser", "diagram"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: File Formats",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "olefile>=0.46",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +38,7 @@ pdf = ["cairosvg"]
 Homepage = "https://github.com/yeager/libvisio-ng"
 Repository = "https://github.com/yeager/libvisio-ng"
 Issues = "https://github.com/yeager/libvisio-ng/issues"
+Changelog = "https://github.com/yeager/libvisio-ng/releases"
 
 [project.scripts]
 visio2svg = "libvisio_ng.cli:main"

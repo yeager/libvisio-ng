@@ -1,18 +1,19 @@
 # libvisio-ng
 
-A Python library for parsing and converting Microsoft Visio files (.vsdx, .vsd) to SVG.
+A Python library for parsing and converting Microsoft Visio files to SVG.
 
-Extracted from [vsdview](https://github.com/yeager/vsdview)'s built-in parser, libvisio-ng aims to be a standalone, pip-installable library for working with Visio files in Python.
+**Native support for both `.vsdx` (XML) and `.vsd` (binary) formats** — no external C++ dependencies required.
 
 ## Features
 
 - **Native .vsdx parsing** — zero external dependencies for XML-based Visio formats
+- **Native .vsd parsing** — binary OLE2 format support via `olefile` (no libvisio/C++ needed)
 - **Theme support** — resolves Visio themes, gradients, and shadows
 - **Text extraction** — extract all text content from diagrams
 - **Page metadata** — enumerate pages with dimensions and names
-- **SVG output** — high-fidelity SVG conversion
+- **SVG output** — high-fidelity SVG conversion with geometry, text, and styling
 - **CLI tool** — `visio2svg` command for quick conversions
-- **.vsd support** — binary format via optional libvisio backend
+- **PNG/PDF export** — optional CairoSVG-based rasterization
 
 ## Installation
 
@@ -30,8 +31,9 @@ pip install libvisio-ng[png]
 ```python
 from libvisio_ng import convert, get_page_info, extract_text
 
-# Convert all pages to SVG
+# Convert all pages to SVG (works with both .vsdx and .vsd)
 svg_files = convert("diagram.vsdx", output_dir="output/")
+svg_files = convert("legacy.vsd", output_dir="output/")
 
 # Get page information
 for page in get_page_info("diagram.vsdx"):
@@ -41,11 +43,27 @@ for page in get_page_info("diagram.vsdx"):
 text = extract_text("diagram.vsdx")
 ```
 
+### Working with .vsd binary files directly
+
+```python
+from libvisio_ng._vsd_parser import parse_vsd_file
+
+doc = parse_vsd_file("legacy.vsd")
+for page in doc.pages:
+    print(f"Page: {page.name} ({page.width}x{page.height} inches)")
+    for shape in page.shapes:
+        if shape.text:
+            print(f"  Shape {shape.shape_id}: {shape.text}")
+        print(f"    Position: ({shape.xform.pin_x}, {shape.xform.pin_y})")
+        print(f"    Size: {shape.xform.width}x{shape.xform.height}")
+```
+
 ## CLI
 
 ```bash
 # Convert to SVG
 visio2svg convert diagram.vsdx -o output/
+visio2svg convert legacy.vsd -o output/
 
 # Show page info
 visio2svg info diagram.vsdx
@@ -61,24 +79,17 @@ visio2svg text diagram.vsdx
 | Visio Drawing (XML) | .vsdx, .vsdm | ✅ Native |
 | Visio Template (XML) | .vstx, .vstm | ✅ Native |
 | Visio Stencil (XML) | .vssx, .vssm | ✅ Native |
-| Visio Drawing (Binary) | .vsd | 🔧 Via libvisio |
-| Visio Template (Binary) | .vst | 🔧 Via libvisio |
-| Visio Stencil (Binary) | .vss | 🔧 Via libvisio |
-
-## Roadmap
-
-- [ ] Native .vsd binary format parser (no libvisio dependency)
-- [ ] Programmatic shape access API (beyond SVG conversion)
-- [ ] Connection/relationship graph extraction
-- [ ] Stencil/master shape library support
+| Visio Drawing (Binary) | .vsd | ✅ Native (olefile) |
+| Visio Template (Binary) | .vst | ✅ Native (olefile) |
+| Visio Stencil (Binary) | .vss | ✅ Native (olefile) |
 
 ## Architecture
 
-libvisio-ng uses [libvisio](https://wiki.documentfoundation.org/DLP/Libraries/libvisio) (C++, TDF) as an architectural reference but aims to surpass it with better support for modern .vsdx features like themes, gradients, and shadows.
+libvisio-ng uses [libvisio](https://wiki.documentfoundation.org/DLP/Libraries/libvisio) (C++) as an architectural reference but is a pure Python implementation. The .vsd binary parser reads OLE2 structured storage and parses Visio's chunk-based record format to extract pages, shapes, text, geometry, and styling.
 
 ## License
 
-GPL-3.0-or-later — same as vsdview.
+GPL-3.0-or-later
 
 ## Author
 
