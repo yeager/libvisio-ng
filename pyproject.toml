@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "libvisio-ng"
+version = "0.1.0"
+description = "A Python library for parsing Microsoft Visio files (.vsdx, .vsd)"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+authors = [
+    {name = "Daniel Nylander", email = "daniel@danielnylander.se"}
+]
+requires-python = ">=3.10"
+keywords = ["visio", "vsdx", "vsd", "svg", "converter", "parser"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: File Formats",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+png = ["cairosvg"]
+pdf = ["cairosvg"]
+
+[project.urls]
+Homepage = "https://github.com/yeager/libvisio-ng"
+Repository = "https://github.com/yeager/libvisio-ng"
+Issues = "https://github.com/yeager/libvisio-ng/issues"
+
+[project.scripts]
+visio2svg = "libvisio_ng.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["libvisio_ng*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
