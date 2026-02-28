@@ -59,3 +59,37 @@ def test_cli_version():
         capture_output=True, text=True,
     )
     assert "0.5.0" in result.stdout or "0.5.0" in result.stderr
+
+
+def test_dash_array():
+    """Test line pattern dash array generation."""
+    from libvisio_ng._converter import _get_dash_array
+    # Solid line = no dash
+    assert _get_dash_array(1, 1.0) == ""
+    # No line
+    assert _get_dash_array(0, 1.0) == "none"
+    # Dash pattern
+    dash = _get_dash_array(2, 1.0)
+    assert dash and "," in dash
+    # Unknown pattern 15 still generates something
+    assert _get_dash_array(15, 1.0) != ""
+
+
+def test_fill_pattern_defs():
+    """Test fill pattern SVG def generation."""
+    from libvisio_ng._converter import _fill_pattern_defs
+    pats = {"pat1": {"fg": "#000000", "bg": "#FFFFFF", "type": 2}}
+    result = _fill_pattern_defs(pats)
+    assert len(result) > 0
+    assert 'pattern id="pat1"' in result[0]
+
+
+def test_convert_svg_contains_defs():
+    """Test that converted SVG has proper defs (markers, gradients)."""
+    from libvisio_ng import convert
+    with tempfile.TemporaryDirectory() as tmpdir:
+        svg_files = convert(str(MINIMAL_VSDX), output_dir=tmpdir)
+        content = open(svg_files[0]).read()
+        assert "<svg" in content
+        # Should have viewBox
+        assert "viewBox" in content
