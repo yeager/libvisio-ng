@@ -294,6 +294,56 @@ def _escape_xml(text: str) -> str:
 # Embedded image support
 # ---------------------------------------------------------------------------
 
+def _apply_color_transforms(elem: ET.Element, base_color: str, dml_ns: str) -> str:
+    """Apply DrawingML color transform children (tint, shade, lumMod, lumOff, satMod, alpha).
+
+    These are sub-elements like <a:tint val="50000"/> meaning 50% tint.
+    """
+    if not base_color or not base_color.startswith("#") or len(base_color) != 7:
+        return base_color
+    try:
+        r = int(base_color[1:3], 16)
+        g = int(base_color[3:5], 16)
+        b = int(base_color[5:7], 16)
+    except ValueError:
+        return base_color
+
+    for child in elem:
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        val = int(child.get("val", "0"))
+        pct = val / 100000.0  # DrawingML uses 1/100000 units
+
+        if tag == "tint":
+            # Tint: blend towards white
+            r = int(r + (255 - r) * pct)
+            g = int(g + (255 - g) * pct)
+            b = int(b + (255 - b) * pct)
+        elif tag == "shade":
+            # Shade: blend towards black
+            r = int(r * pct)
+            g = int(g * pct)
+            b = int(b * pct)
+        elif tag == "lumMod":
+            # Luminance modulation
+            r = min(255, int(r * pct))
+            g = min(255, int(g * pct))
+            b = min(255, int(b * pct))
+        elif tag == "lumOff":
+            # Luminance offset
+            off = int(255 * pct)
+            r = min(255, max(0, r + off))
+            g = min(255, max(0, g + off))
+            b = min(255, max(0, b + off))
+        elif tag == "satMod":
+            # Saturation modulation — convert to HSL, modify, convert back
+            pass  # Complex; skip for now
+
+    r = max(0, min(255, r))
+    g = max(0, min(255, g))
+    b = max(0, min(255, b))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
 def _parse_theme(zf: zipfile.ZipFile) -> dict[str, str]:
     """Parse theme colors from visio/theme/theme1.xml.
 
@@ -330,17 +380,23 @@ def _parse_theme(zf: zipfile.ZipFile) -> dict[str, str]:
                 if elem is None:
                     continue
                 # Look for srgbClr or sysClr
+                base_color = None
                 srgb = elem.find(f"{{{_DML_NS}}}srgbClr")
                 if srgb is not None:
                     val = srgb.get("val", "")
                     if val:
-                        theme_colors[cname] = f"#{val}"
+                        base_color = f"#{val}"
+                        # Apply tint/shade modifiers from child elements
+                        base_color = _apply_color_transforms(srgb, base_color, _DML_NS)
                 else:
                     sys_clr = elem.find(f"{{{_DML_NS}}}sysClr")
                     if sys_clr is not None:
                         val = sys_clr.get("lastClr", "") or sys_clr.get("val", "")
                         if val and len(val) == 6:
-                            theme_colors[cname] = f"#{val}"
+                            base_color = f"#{val}"
+                            base_color = _apply_color_transforms(sys_clr, base_color, _DML_NS)
+                if base_color:
+                    theme_colors[cname] = base_color
 
             break  # Only use the first clrScheme found
 
@@ -764,22 +820,40 @@ def _fill_pattern_defs(patterns: dict[str, dict]) -> list[str]:
 def _gradient_defs(gradients: dict[str, dict]) -> list[str]:
     """Generate SVG <defs> for gradient fills.
 
-    gradients: {grad_id: {"start": color, "end": color, "dir": angle_deg}}
+    gradients: {grad_id: {"start": color, "end": color, "dir": angle_deg,
+                           "radial": bool, "stops": [(offset, color), ...],
+                           "cx": float, "cy": float, "fx": float, "fy": float}}
     """
     if not gradients:
         return []
     lines = []
     for gid, g in sorted(gradients.items()):
+        stops = g.get("stops")
+        if not stops:
+            stops = [(0, g["start"]), (100, g["end"])]
+            # Generate a midpoint stop for smoother 3-stop gradients
+            if g.get("mid"):
+                stops = [(0, g["start"]), (50, g["mid"]), (100, g["end"])]
+
+        stop_xml = "".join(
+            f'<stop offset="{off}%" stop-color="{col}"/>' for off, col in stops
+        )
+
         if g.get("radial"):
+            # Radial gradient with optional focal point
+            gcx = g.get("cx", 50)
+            gcy = g.get("cy", 50)
+            gfx = g.get("fx", gcx)
+            gfy = g.get("fy", gcy)
+            gr = g.get("r", 50)
             lines.append(
-                f'<radialGradient id="{gid}" cx="50%" cy="50%" r="50%">'
-                f'<stop offset="0%" stop-color="{g["start"]}"/>'
-                f'<stop offset="100%" stop-color="{g["end"]}"/>'
+                f'<radialGradient id="{gid}" cx="{gcx}%" cy="{gcy}%" '
+                f'r="{gr}%" fx="{gfx}%" fy="{gfy}%">'
+                f'{stop_xml}'
                 f'</radialGradient>'
             )
         else:
             angle = g.get("dir", 0)
-            # Convert angle to x1,y1,x2,y2 for linearGradient
             rad = math.radians(angle)
             x1 = 50 - 50 * math.cos(rad)
             y1 = 50 + 50 * math.sin(rad)
@@ -788,19 +862,24 @@ def _gradient_defs(gradients: dict[str, dict]) -> list[str]:
             lines.append(
                 f'<linearGradient id="{gid}" '
                 f'x1="{x1:.1f}%" y1="{y1:.1f}%" x2="{x2:.1f}%" y2="{y2:.1f}%">'
-                f'<stop offset="0%" stop-color="{g["start"]}"/>'
-                f'<stop offset="100%" stop-color="{g["end"]}"/>'
+                f'{stop_xml}'
                 f'</linearGradient>'
             )
     return lines
 
 
-def _shadow_filter_def() -> str:
+def _shadow_filter_def(shadow_id: str = "shadow",
+                       dx: float = 2.0, dy: float = 2.0,
+                       color: str = "#000000",
+                       opacity: float = 0.25,
+                       blur: float = 1.5) -> str:
     """Return SVG filter definition for drop shadows."""
+    # Combine color and opacity into flood-color + flood-opacity
     return (
-        '<filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">'
-        '<feDropShadow dx="2" dy="2" stdDeviation="1.5" flood-color="#00000040"/>'
-        '</filter>'
+        f'<filter id="{shadow_id}" x="-20%" y="-20%" width="150%" height="150%">'
+        f'<feDropShadow dx="{dx:.1f}" dy="{dy:.1f}" stdDeviation="{blur:.1f}" '
+        f'flood-color="{color}" flood-opacity="{opacity:.2f}"/>'
+        f'</filter>'
     )
 
 
@@ -968,6 +1047,21 @@ def _parse_single_shape(shape_elem: ET.Element) -> dict:
                 for cell in row.findall(f"{_VTAG}Cell"):
                     fmt[cell.get("N", "")] = cell.get("V", "")
                 sd["para_formats"][row_ix] = fmt
+
+        elif sec_name == "FillGradientDef":
+            # Multi-stop gradient definitions
+            grad_stops = []
+            for row in section.findall(f"{_VTAG}Row"):
+                stop_cells = {}
+                for cell in row.findall(f"{_VTAG}Cell"):
+                    stop_cells[cell.get("N", "")] = cell.get("V", "")
+                pos = _safe_float(stop_cells.get("GradientStopPosition", "0"))
+                color = stop_cells.get("GradientStopColor", "")
+                trans = _safe_float(stop_cells.get("GradientStopTransparency", "0"))
+                if color:
+                    grad_stops.append((pos * 100, color))
+            if grad_stops:
+                sd["_gradient_stops"] = [grad_stops]
 
     # Also parse Geom sections that are direct children (alternative format)
     for geom_idx in range(20):  # Max 20 geometry sections
@@ -1207,30 +1301,44 @@ def _geometry_to_path(geo: dict, w: float, h: float,
             nurbs_pts = _parse_nurbs_formula(e_formula if "NURBS" in e_formula else e_val, cx, cy, x, y, sx, sy)
             if not nurbs_pts and ";" in e_val:
                 # Try semicolon-separated format from VSD parser: "x,y,knot,weight;..."
-                nurbs_pts = []
+                ctrl_pts_raw = []
+                knots_raw = []
                 for group in e_val.split(";"):
                     parts = group.strip().split(",")
-                    if len(parts) >= 2:
+                    if len(parts) >= 4:
                         try:
-                            nurbs_pts.append((_safe_float(parts[0]) * sx, _safe_float(parts[1]) * sy))
+                            px_v = _safe_float(parts[0]) * sx
+                            py_v = _safe_float(parts[1]) * sy
+                            k_v = _safe_float(parts[2])
+                            w_v = _safe_float(parts[3])
+                            ctrl_pts_raw.append((px_v, py_v, max(w_v, 0.001)))
+                            knots_raw.append(k_v)
                         except (ValueError, IndexError):
                             pass
-            if nurbs_pts and len(nurbs_pts) >= 2:
-                # Use quadratic or cubic Bézier approximation
-                if len(nurbs_pts) == 2:
-                    # Two control points → cubic Bézier
-                    cp1x, cp1y = nurbs_pts[0]
-                    cp2x, cp2y = nurbs_pts[1]
-                    d_parts.append(
-                        f"C {cp1x * _INCH_TO_PX:.2f} {(abs_h - cp1y) * _INCH_TO_PX:.2f} "
-                        f"{cp2x * _INCH_TO_PX:.2f} {(abs_h - cp2y) * _INCH_TO_PX:.2f} "
-                        f"{x * _INCH_TO_PX:.2f} {(abs_h - y) * _INCH_TO_PX:.2f}"
-                    )
+                    elif len(parts) >= 2:
+                        try:
+                            ctrl_pts_raw.append((_safe_float(parts[0]) * sx, _safe_float(parts[1]) * sy, 1.0))
+                        except (ValueError, IndexError):
+                            pass
+                if ctrl_pts_raw and len(ctrl_pts_raw) >= 2:
+                    # Use De Boor tessellation
+                    all_pts = [(cx, cy, 1.0)] + ctrl_pts_raw + [(x, y, 1.0)]
+                    degree = 3
+                    knot_last = knots_raw[-1] if knots_raw else 1.0
+                    all_knots = ([0.0] * (degree + 1) + knots_raw +
+                                 [knot_last] * (degree + 1))
+                    needed = len(all_pts) + degree + 1
+                    while len(all_knots) < needed:
+                        all_knots.append(knot_last)
+                    nurbs_pts = _evaluate_nurbs_curve(all_pts, all_knots, degree, max(20, len(all_pts) * 8))
                 else:
-                    # Multiple points → approximate with lines through them
-                    for px_val, py_val in nurbs_pts:
-                        d_parts.append(f"L {px_val * _INCH_TO_PX:.2f} {(abs_h - py_val) * _INCH_TO_PX:.2f}")
-                    d_parts.append(f"L {x * _INCH_TO_PX:.2f} {(abs_h - y) * _INCH_TO_PX:.2f}")
+                    nurbs_pts = [(p[0], p[1]) for p in ctrl_pts_raw]
+            if nurbs_pts and len(nurbs_pts) >= 2:
+                # Emit tessellated points as line segments (smooth enough with many samples)
+                for px_val, py_val in nurbs_pts[1:]:  # skip first (= current point)
+                    d_parts.append(f"L {px_val * _INCH_TO_PX:.2f} {(abs_h - py_val) * _INCH_TO_PX:.2f}")
+                # Ensure we end exactly at the target point
+                d_parts.append(f"L {x * _INCH_TO_PX:.2f} {(abs_h - y) * _INCH_TO_PX:.2f}")
             else:
                 d_parts.append(f"L {x * _INCH_TO_PX:.2f} {(abs_h - y) * _INCH_TO_PX:.2f}")
             cx, cy = x, y
@@ -1383,43 +1491,90 @@ def _append_arc(d_parts: list, cx: float, cy: float, x: float, y: float,
 
 def _append_elliptical_arc(d_parts: list, cx: float, cy: float,
                            x: float, y: float, a: float, b: float,
-                           c: float, d_val: float, h: float):
-    """Append an elliptical arc segment.
+                           d_ratio: float, c_angle: float, h: float):
+    """Append an elliptical arc segment (EllipticalArcTo).
 
-    (a,b) = control point, c = aspect ratio (D cell), d_val = rotation angle (C cell).
-    For simplicity, approximate with SVG arc.
+    Parameters (Visio cells):
+        (cx, cy) = current point
+        (x, y)   = endpoint
+        (a, b)   = control point on the arc (determines curvature)
+        d_ratio  = D cell: ratio of major to minor axis (>0)
+        c_angle  = C cell: angle of major axis in radians
+
+    The control point (a, b) lies on the arc itself.  Together with the
+    start and end points it fully determines the ellipse.  We find the
+    ellipse centre numerically and emit a proper SVG arc command.
     """
-    # Compute approximate radius from control point
-    mid_x = (cx + x) / 2
-    mid_y = (cy + y) / 2
-    dist_to_control = math.sqrt((a - mid_x) ** 2 + (b - mid_y) ** 2)
     chord = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-
     if chord < 1e-10:
         return
 
-    sagitta = dist_to_control
+    # Degenerate case: control point is on the chord → straight line
+    mid_x = (cx + x) / 2
+    mid_y = (cy + y) / 2
+    dist_ctrl = math.sqrt((a - mid_x) ** 2 + (b - mid_y) ** 2)
+    if dist_ctrl < 1e-6 and abs(d_ratio - 1.0) < 0.01:
+        d_parts.append(f"L {x * _INCH_TO_PX:.2f} {(h - y) * _INCH_TO_PX:.2f}")
+        return
+
+    # Rotation angle of the ellipse major axis
+    angle_deg = math.degrees(c_angle) if c_angle else 0.0
+    cos_a = math.cos(-c_angle) if c_angle else 1.0
+    sin_a = math.sin(-c_angle) if c_angle else 0.0
+
+    # d_ratio = major/minor.  If 0 or negative, treat as circle.
+    if d_ratio < 0.001:
+        d_ratio = 1.0
+
+    # We need to find rx, ry such that all three points (start, control, end)
+    # lie on the ellipse.  Rotate points into the ellipse's local frame.
+    def to_local(px, py):
+        dx, dy = px - mid_x, py - mid_y
+        return cos_a * dx + sin_a * dy, -sin_a * dx + cos_a * dy
+
+    # In the rotated frame, try to fit an ellipse through the three points.
+    # Use the control point distance to estimate the sagitta.
+    p1l = to_local(cx, cy)
+    p2l = to_local(x, y)
+    p3l = to_local(a, b)
+
+    # Sagitta approach: distance from control point to chord midpoint
+    # in local frame gives the minor-axis bulge
+    chord_mid_l = ((p1l[0] + p2l[0]) / 2, (p1l[1] + p2l[1]) / 2)
+    sagitta_x = p3l[0] - chord_mid_l[0]
+    sagitta_y = p3l[1] - chord_mid_l[1]
+    sagitta = math.sqrt(sagitta_x ** 2 + sagitta_y ** 2)
+
     if sagitta < 1e-6:
         d_parts.append(f"L {x * _INCH_TO_PX:.2f} {(h - y) * _INCH_TO_PX:.2f}")
         return
 
-    rx = (chord * chord / 4 + sagitta * sagitta) / (2 * sagitta)
-    ry = rx / c if c > 0.001 else rx  # c is major/minor ratio
-    angle_deg = math.degrees(d_val) if d_val else 0
+    # Half-chord length in local frame
+    half_chord = math.sqrt((p2l[0] - p1l[0]) ** 2 + (p2l[1] - p1l[1]) ** 2) / 2
 
-    rx_px = abs(rx * _INCH_TO_PX)
-    ry_px = abs(ry * _INCH_TO_PX)
-    if rx_px < 0.1:
-        rx_px = 0.1
-    if ry_px < 0.1:
-        ry_px = 0.1
+    # Compute the radius from chord and sagitta
+    r = (half_chord ** 2 + sagitta ** 2) / (2 * sagitta)
+    # Clamp to avoid absurdly large radii
+    r = min(r, chord * 5.0)
 
-    # Determine arc direction from control point position relative to chord.
-    # The cross product sign tells us which side of the chord the control point is on.
-    # In Visio coords (Y-up), but SVG uses Y-down, so we negate the result.
+    # Apply aspect ratio: rx = r, ry = r / d_ratio (or vice versa)
+    rx = abs(r)
+    ry = abs(r / d_ratio) if d_ratio != 0 else rx
+
+    # Ensure radii are large enough to reach both endpoints
+    # (SVG spec: if radii too small, they're auto-scaled)
+    rx_px = max(rx * _INCH_TO_PX, 0.1)
+    ry_px = max(ry * _INCH_TO_PX, 0.1)
+
+    # Determine sweep and large-arc flags from control point position
+    # Cross product of chord vector with vector to control point
     cross = (x - cx) * (b - cy) - (y - cy) * (a - cx)
     sweep = 0 if cross < 0 else 1
-    large_arc = 0
+
+    # Large arc: control point on the far side of the chord means large arc
+    # Check if the control point is farther from the chord midpoint than the
+    # chord endpoints
+    large_arc = 1 if sagitta > half_chord else 0
 
     d_parts.append(
         f"A {rx_px:.2f} {ry_px:.2f} {angle_deg:.1f} {large_arc} {sweep} "
@@ -1427,14 +1582,89 @@ def _append_elliptical_arc(d_parts: list, cx: float, cy: float,
     )
 
 
+def _evaluate_nurbs_curve(ctrl_pts: list[tuple[float, float, float]],
+                          knots: list[float], degree: int,
+                          num_samples: int = 40) -> list[tuple[float, float]]:
+    """Evaluate a NURBS curve using De Boor's algorithm.
+
+    ctrl_pts: list of (x, y, weight) control points
+    knots: knot vector
+    degree: curve degree (typically 3)
+    num_samples: number of output points for tessellation
+
+    Returns list of (x, y) points along the curve.
+    """
+    n = len(ctrl_pts)
+    if n < 2:
+        return [(p[0], p[1]) for p in ctrl_pts]
+
+    # Convert to homogeneous weighted coordinates
+    weighted = [(p[0] * p[2], p[1] * p[2], p[2]) for p in ctrl_pts]
+
+    # Parameter range from knots
+    p = degree
+    t_min = knots[p] if p < len(knots) else 0.0
+    t_max = knots[n] if n < len(knots) else knots[-1]
+    if abs(t_max - t_min) < 1e-10:
+        return [(ctrl_pts[0][0], ctrl_pts[0][1]),
+                (ctrl_pts[-1][0], ctrl_pts[-1][1])]
+
+    result = []
+    for step in range(num_samples + 1):
+        t = t_min + (t_max - t_min) * step / num_samples
+        # Clamp to valid range
+        t = max(t_min, min(t, t_max - 1e-10))
+
+        # Find knot span
+        span = p
+        for j in range(p, n):
+            if j + 1 < len(knots) and knots[j + 1] > t:
+                span = j
+                break
+        else:
+            span = n - 1
+
+        # De Boor recursion
+        d = []
+        for j in range(p + 1):
+            idx = span - p + j
+            if 0 <= idx < n:
+                d.append(list(weighted[idx]))
+            else:
+                d.append([0.0, 0.0, 1.0])
+
+        for r in range(1, p + 1):
+            for j in range(p, r - 1, -1):
+                left = span - p + j
+                ki = left + p + 1 - r
+                if ki < len(knots) and left < len(knots):
+                    denom = knots[ki] - knots[left]
+                    if abs(denom) > 1e-10:
+                        alpha = (t - knots[left]) / denom
+                    else:
+                        alpha = 0.0
+                else:
+                    alpha = 0.0
+                for k in range(3):
+                    d[j][k] = (1.0 - alpha) * d[j - 1][k] + alpha * d[j][k]
+
+        w = d[p][2]
+        if abs(w) > 1e-10:
+            result.append((d[p][0] / w, d[p][1] / w))
+        elif result:
+            result.append(result[-1])
+
+    return result
+
+
 def _parse_nurbs_formula(e_val: str, cx: float, cy: float,
                          ex: float, ey: float,
                          sx: float = 1.0, sy: float = 1.0) -> list[tuple[float, float]]:
-    """Parse a NURBS formula and return intermediate control points.
+    """Parse a NURBS formula and return tessellated curve points.
 
     NURBS format: NURBS(knotLast, degree, xType, yType, x1,y1,k1,w1, x2,y2,k2,w2, ...)
-    For degree=3 (cubic), we extract control points and scale them.
-    Returns list of (x, y) control points in shape coordinates.
+    Uses De Boor's algorithm for proper NURBS evaluation when possible.
+    Returns list of (x, y) points in shape coordinates.
     """
     if not e_val:
         return []
@@ -1451,33 +1681,57 @@ def _parse_nurbs_formula(e_val: str, cx: float, cy: float,
     degree = int(vals[1])
     x_type = int(vals[2])  # 0 = fraction of Width, 1 = absolute
     y_type = int(vals[3])  # 0 = fraction of Height, 1 = absolute
+
     # Extract control points (groups of 4: x, y, knot, weight)
-    points = []
+    ctrl_pts = []  # (x, y, weight)
+    knots_list = []
     for i in range(4, len(vals) - 3, 4):
         px = vals[i]
         py = vals[i + 1]
-        # knot = vals[i + 2], weight = vals[i + 3] — not used for simple approx
-        # When x_type/y_type=0, coords are fractions (0-1) — leave as-is
-        # When =1, coords are absolute inches — apply scaling
-        if x_type == 1:
-            px *= sx
-        if y_type == 1:
-            py *= sy
-        points.append((px, py))
-    # Map NURBS control points to absolute coordinates.
-    # When type=0 (fractional), the control points are fractions of the
-    # overall curve parameter space from start to end.
+        knot = vals[i + 2]
+        weight = vals[i + 3]
+        if weight <= 0:
+            weight = 1.0
+        ctrl_pts.append((px, py, weight))
+        knots_list.append(knot)
+
+    if len(ctrl_pts) < 2:
+        return []
+
+    # Build proper knot vector: start with 'degree+1' zeros, then interior
+    # knots, then 'degree+1' copies of knotLast.
+    n_ctrl = len(ctrl_pts)
+    # Include start point (cx, cy) and end point (ex, ey) as first/last
+    # control points for the full NURBS curve
+    all_pts = [(cx, cy, 1.0)] + ctrl_pts + [(ex, ey, 1.0)]
+    # Interior knots from formula, plus bookend with 0 and knotLast
+    all_knots = ([0.0] * (degree + 1) +
+                 knots_list +
+                 [knot_last] * (degree + 1))
+
+    # Pad knots if needed
+    needed = len(all_pts) + degree + 1
+    while len(all_knots) < needed:
+        all_knots.append(knot_last)
+
+    # Tessellate with enough samples for smooth curves
+    num_samples = max(20, len(all_pts) * 8)
+    curve_pts = _evaluate_nurbs_curve(all_pts, all_knots, degree, num_samples)
+
+    # Map to shape coordinates
     result = []
-    for px, py in points:
+    for bx, by in curve_pts:
         if x_type == 0:
-            bx = cx + px * (ex - cx)
+            # Fractional coords were already in the curve evaluation
+            pass
         else:
-            bx = px  # already in absolute shape coords
+            bx *= sx
         if y_type == 0:
-            by = cy + py * (ey - cy)
+            pass
         else:
-            by = py  # already in absolute shape coords
+            by *= sy
         result.append((bx, by))
+
     return result
 
 
@@ -1669,6 +1923,10 @@ def _merge_shape_with_master(shape: dict, masters: dict,
     # Merge foreign data (embedded images) from master
     if not shape.get("foreign_data") and master_sd.get("foreign_data"):
         shape["foreign_data"] = master_sd["foreign_data"]
+
+    # Merge gradient stops from master
+    if not shape.get("_gradient_stops") and master_sd.get("_gradient_stops"):
+        shape["_gradient_stops"] = master_sd["_gradient_stops"]
 
     # Fix black blob stencils: inherit line/fill styles from master
     # when the instance has no explicit style override
@@ -1992,36 +2250,48 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
         if start_color.upper() == end_color.upper():
             fill = start_color
         else:
-            # If both are the same or start is white, create a visible gradient
             if start_color == end_color and end_color != "#FFFFFF":
                 start_color = _lighten_color(end_color, 0.7)
             grad_dir = _get_cell_float(shape, "FillGradientDir")
-            # Map Visio gradient direction to angle
-            if grad_dir:
+            grad_angle_raw = _get_cell_float(shape, "FillGradientAngle")
+            if grad_angle_raw:
+                grad_angle = math.degrees(grad_angle_raw) if abs(grad_angle_raw) < 7 else grad_angle_raw
+            elif grad_dir:
                 grad_angle = grad_dir * 45
             else:
-                # Map FillPattern to gradient direction when FillGradientDir
-                # is not set (classic Visio gradient patterns)
                 _pattern_angles = {
-                    25: 0,    # Linear left-to-right
-                    26: 90,   # Linear top-to-bottom
-                    27: 45,   # Diagonal top-left to bottom-right
-                    28: 315,  # Diagonal bottom-left to top-right
-                    29: 0,    # Linear from center (radial approx)
-                    30: 90,   # Vertical from center
-                    33: 0,    # Horizontal
-                    34: 90,   # Vertical
-                    35: 45,   # Diagonal
-                    36: 315,  # Reverse diagonal
-                    40: 0,    # Horizontal
+                    25: 0, 26: 90, 27: 45, 28: 315, 29: 0, 30: 90,
+                    33: 0, 34: 90, 35: 45, 36: 315, 40: 0,
                 }
                 grad_angle = _pattern_angles.get(fill_pat_int, 0)
             grad_id = f"grad_{shape['id']}_{fill_pat_int}"
             is_radial = fill_pat_int in (29, 30, 31, 32, 37, 38, 39)
-            gradients[grad_id] = {
+            grad_info: dict = {
                 "start": start_color, "end": end_color,
-                "dir": grad_angle, "radial": is_radial
+                "dir": grad_angle, "radial": is_radial,
             }
+            # Multi-stop gradients from FillGradientDef section
+            grad_stops_data = shape.get("_gradient_stops", [])
+            if grad_stops_data and grad_stops_data[0]:
+                resolved_stops = []
+                for pos, col in grad_stops_data[0]:
+                    resolved_col = _resolve_color(col, theme_colors) or col
+                    if resolved_col.startswith("#"):
+                        resolved_stops.append((pos, resolved_col))
+                if len(resolved_stops) >= 2:
+                    grad_info["stops"] = resolved_stops
+            # Generate mid-color for smoother 2-color gradients
+            if not grad_info.get("stops"):
+                mid = _lighten_color(end_color, 0.3)
+                if mid.upper() != start_color.upper() and mid.upper() != end_color.upper():
+                    grad_info["mid"] = mid
+            # Radial gradient focus point
+            if is_radial:
+                focus_x = _get_cell_float(shape, "FillGradientFocusX", 0.5)
+                focus_y = _get_cell_float(shape, "FillGradientFocusY", 0.5)
+                grad_info["fx"] = focus_x * 100
+                grad_info["fy"] = focus_y * 100
+            gradients[grad_id] = grad_info
             fill = f"url(#{grad_id})"
     elif 2 <= fill_pat_int <= 24:
         # Hatching/pattern fill
@@ -2056,13 +2326,23 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
     if any(kw in shape_name for kw in ("dash square", "container", "swimlane")):
         is_container = True
 
-    # Shadow support
+    # Shadow support — per-shape shadow with offset, color, transparency
     shdw_pattern = _get_cell_val(shape, "ShdwPattern")
     shape_has_shadow = shdw_pattern and shdw_pattern != "0"
     shadow_attr = ""
     if shape_has_shadow:
-        has_shadow.add("shadow")
-        shadow_attr = ' filter="url(#shadow)"'
+        shdw_offset_x = _get_cell_float(shape, "ShdwOffsetX", 0.0278) * _INCH_TO_PX
+        shdw_offset_y = -_get_cell_float(shape, "ShdwOffsetY", -0.0278) * _INCH_TO_PX  # Visio Y-up → SVG Y-down
+        shdw_color = _resolve_color(_get_cell_val(shape, "ShdwForegnd"), theme_colors) or "#000000"
+        shdw_trans = _get_cell_float(shape, "ShdwForegndTrans", 0.5)
+        if shdw_trans > 1:
+            shdw_trans = shdw_trans / 100.0
+        shdw_opacity = max(0.05, 1.0 - shdw_trans)
+        shdw_blur = max(0.5, min(abs(shdw_offset_x), abs(shdw_offset_y), 4.0))
+        # Create a unique shadow filter for this shape
+        shdw_id = f"shadow_{shape['id']}"
+        has_shadow.add(f"{shdw_id}|{shdw_offset_x:.1f}|{shdw_offset_y:.1f}|{shdw_color}|{shdw_opacity:.2f}|{shdw_blur:.1f}")
+        shadow_attr = f' filter="url(#{shdw_id})"'
 
     # No line if pattern 0
     stroke = line_color if line_pattern != 0 else "none"
@@ -2715,8 +2995,18 @@ def _append_text_svg(lines: list, shape: dict, page_h: float,
         if abs(txt_angle_deg - 90) < 5 or abs(txt_angle_deg + 90) < 5:
             tx += font_size * 0.5
 
-    # Bullet support
+    # Bullet support — check all paragraph formats for bullets
     bullet = int(_safe_float(para_fmt.get("Bullet", "0")))
+    bullet_str = para_fmt.get("BulletStr", "")
+    ind_first = _safe_float(para_fmt.get("IndFirst", "0")) * _INCH_TO_PX
+    ind_left = _safe_float(para_fmt.get("IndLeft", "0")) * _INCH_TO_PX
+    # Check if any paragraph has bullets
+    has_any_bullet = bullet > 0
+    if not has_any_bullet:
+        for pp_key, pp_fmt in shape.get("para_formats", {}).items():
+            if int(_safe_float(pp_fmt.get("Bullet", "0"))) > 0:
+                has_any_bullet = True
+                break
 
     # Container detection for top-left label positioning
     user_data = shape.get("user", {})
@@ -2804,9 +3094,34 @@ def _append_text_svg(lines: list, shape: dict, page_h: float,
     if len(stripped) == 1 and stripped[0].lower() in _PLACEHOLDERS:
         if shape.get("master"):
             return
-    if bullet > 0:
-        bullet_char = "• " if bullet == 1 else "‣ " if bullet == 2 else "– "
-        text_lines = [bullet_char + tl if tl.strip() else tl for tl in text_lines]
+    if has_any_bullet:
+        # Per-paragraph bullet handling
+        if text_parts:
+            # Map lines to their paragraph format for per-line bullets
+            line_pp = []
+            cur_pp = "0"
+            for part in text_parts:
+                cur_pp = part.get("pp", cur_pp)
+                lines_in_part = part.get("text", "").split("\n")
+                for _ in lines_in_part:
+                    line_pp.append(cur_pp)
+            bullet_lines = []
+            line_idx = 0
+            for tl in text_lines:
+                pp_idx = line_pp[line_idx] if line_idx < len(line_pp) else "0"
+                pp_fmt = shape.get("para_formats", {}).get(pp_idx, para_fmt)
+                b = int(_safe_float(pp_fmt.get("Bullet", "0")))
+                if b > 0 and tl.strip():
+                    b_str = pp_fmt.get("BulletStr", "")
+                    b_char = b_str if b_str else ("• " if b == 1 else "‣ " if b == 2 else "– ")
+                    bullet_lines.append(b_char + tl)
+                else:
+                    bullet_lines.append(tl)
+                line_idx += 1
+            text_lines = bullet_lines
+        else:
+            bullet_char = bullet_str if bullet_str else ("• " if bullet == 1 else "‣ " if bullet == 2 else "– ")
+            text_lines = [bullet_char + tl if tl.strip() else tl for tl in text_lines]
 
     # Handle zero-height shapes (text-only labels in Visio)
     if h_px <= 0:
@@ -2901,52 +3216,91 @@ def _append_text_svg(lines: list, shape: dict, page_h: float,
     total_height = len(text_lines) * font_size * 1.2
 
     if has_multi_format and text_parts:
-        # Multi-format text: render each part as a tspan
-        # Collect parts into lines by splitting on newlines
-        all_text = ""
-        part_spans = []
+        # Multi-format text: render each part as a tspan with per-run styling
+        # Split text_parts into lines, preserving formatting across line breaks
+        formatted_lines = []  # list of [(text, cp, pp), ...]
+        current_line_parts = []
         for part in text_parts:
             part_text = part.get("text", "")
             if not part_text:
                 continue
             cp = part.get("cp", "0")
-            cfmt = char_formats.get(cp, char_fmt)
-            p_font_size = _safe_float(cfmt.get("Size"), 0.1111) * _INCH_TO_PX
-            if p_font_size < 6:
-                p_font_size = 8
-            p_color = _resolve_color(cfmt.get("Color", ""), theme_colors) or text_color
-            p_font = _map_font_family(cfmt.get("Font", font_name))
-            p_style = int(_safe_float(cfmt.get("Style", "0")))
-            p_bold = "bold" if p_style & 1 else "normal"
-            p_italic = "italic" if p_style & 2 else "normal"
-            part_spans.append({
-                "text": part_text, "font": p_font, "size": p_font_size,
-                "color": p_color, "bold": p_bold, "italic": p_italic
-            })
-            all_text += part_text
-
-        # Render as single text element with tspans
-        lines.append(
-            f'<text x="{tx:.2f}" y="{ty:.2f}" '
-            f'text-anchor="{text_anchor}" dominant-baseline="central" '
-            f'font-family="{font_family}" font-size="{font_size:.1f}" '
-            f'fill="{text_color}"{fw}{fs}{td}{txt_rotate}{clip_attr}>'
-        )
-        for span in part_spans:
-            escaped = _escape_xml(span["text"])
-            # Handle newlines within spans
-            sub_lines = escaped.split("\n")
+            pp = part.get("pp", "0")
+            sub_lines = part_text.split("\n")
             for k, sl in enumerate(sub_lines):
-                if not sl:
-                    continue
-                dy_attr = f' dy="{span["size"] * 1.2:.1f}" x="{tx:.2f}"' if k > 0 else ""
-                lines.append(
-                    f'<tspan font-family="{span["font"]}" '
-                    f'font-size="{span["size"]:.1f}" fill="{span["color"]}" '
-                    f'font-weight="{span["bold"]}" font-style="{span["italic"]}"{dy_attr}>'
-                    f'{sl}</tspan>'
+                if k > 0:
+                    # Newline: flush current line and start new one
+                    formatted_lines.append(current_line_parts)
+                    current_line_parts = []
+                if sl:
+                    current_line_parts.append({"text": sl, "cp": cp, "pp": pp})
+        if current_line_parts:
+            formatted_lines.append(current_line_parts)
+
+        # Compute vertical start position
+        total_lines = len(formatted_lines)
+        line_height = font_size * 1.3
+        total_h = total_lines * line_height
+        if not is_container:
+            if vert_align == 0:
+                start_y = pin_y - h_px / 2 + font_size
+            elif vert_align == 2:
+                start_y = pin_y + h_px / 2 - total_h + font_size * 0.6
+            else:
+                start_y = ty - total_h / 2 + font_size * 0.6
+        else:
+            start_y = ty
+
+        # Render each line
+        for line_idx, line_parts in enumerate(formatted_lines):
+            if not line_parts:
+                continue
+            # Check if all parts in this line are whitespace-only
+            if all(not lp["text"].strip() for lp in line_parts):
+                continue
+            ly = start_y + line_idx * line_height
+
+            # Per-paragraph indent for bullet lists
+            pp_idx = line_parts[0].get("pp", "0")
+            pp_fmt = shape.get("para_formats", {}).get(pp_idx, para_fmt)
+            p_indent = _safe_float(pp_fmt.get("IndLeft", "0")) * _INCH_TO_PX
+            line_tx = tx + p_indent
+
+            # Build tspan elements for this line
+            tspan_xml = ""
+            for lp in line_parts:
+                cp = lp["cp"]
+                cfmt = char_formats.get(cp, char_fmt)
+                p_font_size = _safe_float(cfmt.get("Size"), 0.1111) * _INCH_TO_PX
+                if p_font_size < 6:
+                    p_font_size = 8
+                p_color = _resolve_color(cfmt.get("Color", ""), theme_colors) or text_color
+                # Auto-contrast for dark fills
+                if _is_dark_color(p_color):
+                    shape_fill = shape.get("cells", {}).get("FillForegnd", {}).get("V", "")
+                    resolved_fill = _resolve_color(shape_fill, theme_colors) if shape_fill else ""
+                    if resolved_fill and _is_dark_color(resolved_fill):
+                        p_color = "#FFFFFF"
+                p_font = _map_font_family(cfmt.get("Font", font_name))
+                p_style_bits = int(_safe_float(cfmt.get("Style", "0")))
+                p_bold = ' font-weight="bold"' if p_style_bits & 1 else ""
+                p_italic = ' font-style="italic"' if p_style_bits & 2 else ""
+                p_underline = ' text-decoration="underline"' if p_style_bits & 4 else ""
+                escaped = _escape_xml(lp["text"])
+                tspan_xml += (
+                    f'<tspan font-family="{p_font}" '
+                    f'font-size="{p_font_size:.1f}" fill="{p_color}"'
+                    f'{p_bold}{p_italic}{p_underline}>'
+                    f'{escaped}</tspan>'
                 )
-        lines.append('</text>')
+
+            lines.append(
+                f'<text x="{line_tx:.2f}" y="{ly:.2f}" '
+                f'text-anchor="{text_anchor}" '
+                f'font-family="{font_family}" font-size="{font_size:.1f}" '
+                f'fill="{text_color}"{txt_rotate}{clip_attr}>'
+                f'{tspan_xml}</text>'
+            )
     elif len(text_lines) == 1:
         # Single line
         if not is_container:
@@ -3598,13 +3952,17 @@ def _shapes_to_svg(shapes: list[dict], page_w: float, page_h: float,
         display_w = vb_w * scale
         display_h = vb_h * scale
 
+    # Determine background color (from page properties or theme)
+    bg_color = "white"
+    # bg_shapes may carry a page background color; we'll handle that below
+
     svg_lines = [
         f'<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'xmlns:xlink="http://www.w3.org/1999/xlink" '
         f'width="{display_w:.0f}" height="{display_h:.0f}" '
         f'viewBox="{vb_x:.0f} {vb_y:.0f} {vb_w:.0f} {vb_h:.0f}">',
-        f'<rect x="{vb_x:.0f}" y="{vb_y:.0f}" width="{vb_w:.0f}" height="{vb_h:.0f}" fill="white"/>',
+        f'<rect x="{vb_x:.0f}" y="{vb_y:.0f}" width="{vb_w:.0f}" height="{vb_h:.0f}" fill="{bg_color}"/>',
     ]
 
     if masters is None:
@@ -3702,7 +4060,15 @@ def _shapes_to_svg(shapes: list[dict], page_w: float, page_h: float,
     if real_gradients:
         defs_content.extend(_gradient_defs(real_gradients))
     if has_shadow:
-        defs_content.append(_shadow_filter_def())
+        for shdw_spec in sorted(has_shadow):
+            parts = shdw_spec.split("|")
+            if len(parts) == 6:
+                sid, sdx, sdy, scolor, sopacity, sblur = parts
+                defs_content.append(_shadow_filter_def(
+                    sid, float(sdx), float(sdy), scolor, float(sopacity), float(sblur)))
+            else:
+                # Legacy single shadow
+                defs_content.append(_shadow_filter_def())
 
     if defs_content:
         defs_lines = ["<defs>"] + defs_content + ["</defs>"]
