@@ -1095,8 +1095,20 @@ def _geometry_to_path(geo: dict, w: float, h: float,
             x = _safe_float(cells.get("X", {}).get("V")) * sx
             y = _safe_float(cells.get("Y", {}).get("V")) * sy
             # Parse NURBS formula from E cell for control points
-            e_val = cells.get("E", {}).get("V", "")
-            nurbs_pts = _parse_nurbs_formula(e_val, cx, cy, x, y, sx, sy)
+            e_cell = cells.get("E", {})
+            e_val = e_cell.get("V", "")
+            e_formula = e_cell.get("F", "")
+            nurbs_pts = _parse_nurbs_formula(e_formula if "NURBS" in e_formula else e_val, cx, cy, x, y, sx, sy)
+            if not nurbs_pts and ";" in e_val:
+                # Try semicolon-separated format from VSD parser: "x,y,knot,weight;..."
+                nurbs_pts = []
+                for group in e_val.split(";"):
+                    parts = group.strip().split(",")
+                    if len(parts) >= 2:
+                        try:
+                            nurbs_pts.append((_safe_float(parts[0]) * sx, _safe_float(parts[1]) * sy))
+                        except (ValueError, IndexError):
+                            pass
             if nurbs_pts and len(nurbs_pts) >= 2:
                 # Use quadratic or cubic Bézier approximation
                 if len(nurbs_pts) == 2:
@@ -1167,6 +1179,19 @@ def _geometry_to_path(geo: dict, w: float, h: float,
             a_cell = cells.get("A", {})
             formula = a_cell.get("F", "")
             pts = _parse_polyline_formula(formula, abs_w, abs_h)
+            if not pts:
+                # Try V cell: semicolon-separated "x,y" pairs from VSD parser
+                v_val = a_cell.get("V", "")
+                if ";" in v_val or "," in v_val:
+                    pts = []
+                    for pair in v_val.split(";"):
+                        parts = pair.strip().split(",")
+                        if len(parts) >= 2:
+                            try:
+                                pts.append((_safe_float(parts[0]) * sx,
+                                            _safe_float(parts[1]) * sy))
+                            except (ValueError, IndexError):
+                                pass
             if pts:
                 for px_val, py_val in pts:
                     d_parts.append(f"L {px_val * _INCH_TO_PX:.2f} {(abs_h - py_val) * _INCH_TO_PX:.2f}")

@@ -13,7 +13,7 @@ MINIMAL_VSDX = FIXTURES / "minimal.vsdx"
 def test_import():
     """Test that the package can be imported."""
     import libvisio_ng
-    assert libvisio_ng.__version__ == "0.1.0"
+    assert libvisio_ng.__version__ == "0.2.0"
 
 
 def test_extensions():
@@ -58,4 +58,4 @@ def test_cli_version():
         ["python3", "-m", "libvisio_ng.cli", "--version"],
         capture_output=True, text=True,
     )
-    assert "0.1.0" in result.stdout or "0.1.0" in result.stderr
+    assert "0.2.0" in result.stdout or "0.2.0" in result.stderr

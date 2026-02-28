@@ -17,7 +17,7 @@ Example usage:
     text = extract_text("diagram.vsdx")
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from libvisio_ng._converter import (
     convert_vsd_to_svg as convert,
@@ -40,6 +40,10 @@ from libvisio_ng._vsd_parser import (
     VsdDocument,
     VsdPage,
     VsdShape,
+    TextXForm,
+    XForm1D,
+    ParaFormat,
+    ForeignData,
 )
 
 __all__ = [
@@ -55,6 +59,10 @@ __all__ = [
     "VsdDocument",
     "VsdPage",
     "VsdShape",
+    "TextXForm",
+    "XForm1D",
+    "ParaFormat",
+    "ForeignData",
     "VISIO_EXTENSIONS",
     "TEMPLATE_EXTENSIONS",
     "STENCIL_EXTENSIONS",
