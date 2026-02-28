@@ -248,12 +248,24 @@ def _resolve_color(val: str, theme_colors: dict[str, str] | None = None) -> str:
 
 def _get_dash_array(pattern: int, weight: float) -> str:
     """Get SVG stroke-dasharray for a Visio line pattern."""
+    if pattern == 0:
+        return "none"  # No line
     p = _LINE_PATTERNS.get(pattern, "")
     if not p or p == "none":
-        return ""
+        # For unknown patterns 2-23, generate a reasonable dash pattern
+        if 2 <= pattern <= 23:
+            # Generate based on pattern number
+            if pattern % 3 == 0:
+                p = "1,2"  # dot-like
+            elif pattern % 3 == 1:
+                p = "6,3"  # dash-like
+            else:
+                p = "6,3,1,3"  # dash-dot
+        else:
+            return ""
     # Scale dash pattern by stroke weight
     scale = max(weight, 0.5)
-    parts = [str(float(x) * scale) for x in p.split(",")]
+    parts = [str(round(float(x) * scale, 1)) for x in p.split(",")]
     return ",".join(parts)
 
 
@@ -652,6 +664,100 @@ def _arrow_marker_defs(used_markers: set[str]) -> list[str]:
             )
 
     lines.append("</defs>")
+    return lines
+
+
+def _fill_pattern_defs(patterns: dict[str, dict]) -> list[str]:
+    """Generate SVG <defs> for hatching/crosshatch fill patterns.
+
+    patterns: {pattern_id: {"fg": color, "bg": color, "type": int}}
+    """
+    if not patterns:
+        return []
+    lines = []
+    for pid, p in sorted(patterns.items()):
+        fg = p.get("fg", "#000000")
+        bg = p.get("bg", "#FFFFFF")
+        pat_type = p.get("type", 2)
+        spacing = 6
+        stroke_w = 1.0
+
+        if pat_type in (2, 3, 4, 5):
+            # Horizontal/vertical/diagonal lines
+            if pat_type == 2:
+                # Horizontal lines
+                lines.append(
+                    f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                    f'width="{spacing}" height="{spacing}">'
+                    f'<rect width="{spacing}" height="{spacing}" fill="{bg}"/>'
+                    f'<line x1="0" y1="{spacing/2}" x2="{spacing}" y2="{spacing/2}" '
+                    f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                    f'</pattern>'
+                )
+            elif pat_type == 3:
+                # Vertical lines
+                lines.append(
+                    f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                    f'width="{spacing}" height="{spacing}">'
+                    f'<rect width="{spacing}" height="{spacing}" fill="{bg}"/>'
+                    f'<line x1="{spacing/2}" y1="0" x2="{spacing/2}" y2="{spacing}" '
+                    f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                    f'</pattern>'
+                )
+            elif pat_type == 4:
+                # Forward diagonal
+                lines.append(
+                    f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                    f'width="{spacing}" height="{spacing}">'
+                    f'<rect width="{spacing}" height="{spacing}" fill="{bg}"/>'
+                    f'<line x1="0" y1="{spacing}" x2="{spacing}" y2="0" '
+                    f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                    f'</pattern>'
+                )
+            elif pat_type == 5:
+                # Backward diagonal
+                lines.append(
+                    f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                    f'width="{spacing}" height="{spacing}">'
+                    f'<rect width="{spacing}" height="{spacing}" fill="{bg}"/>'
+                    f'<line x1="0" y1="0" x2="{spacing}" y2="{spacing}" '
+                    f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                    f'</pattern>'
+                )
+        elif pat_type in (6, 7, 8, 9):
+            # Crosshatch patterns
+            lines.append(
+                f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                f'width="{spacing}" height="{spacing}">'
+                f'<rect width="{spacing}" height="{spacing}" fill="{bg}"/>'
+                f'<line x1="0" y1="{spacing/2}" x2="{spacing}" y2="{spacing/2}" '
+                f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                f'<line x1="{spacing/2}" y1="0" x2="{spacing/2}" y2="{spacing}" '
+                f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                f'</pattern>'
+            )
+        elif pat_type in (10, 11, 12):
+            # Diagonal crosshatch
+            lines.append(
+                f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                f'width="{spacing}" height="{spacing}">'
+                f'<rect width="{spacing}" height="{spacing}" fill="{bg}"/>'
+                f'<line x1="0" y1="0" x2="{spacing}" y2="{spacing}" '
+                f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                f'<line x1="0" y1="{spacing}" x2="{spacing}" y2="0" '
+                f'stroke="{fg}" stroke-width="{stroke_w}"/>'
+                f'</pattern>'
+            )
+        else:
+            # Dense patterns (13-24) - use dotted/denser versions
+            dot_spacing = max(3, spacing - (pat_type - 12))
+            lines.append(
+                f'<pattern id="{pid}" patternUnits="userSpaceOnUse" '
+                f'width="{dot_spacing}" height="{dot_spacing}">'
+                f'<rect width="{dot_spacing}" height="{dot_spacing}" fill="{bg}"/>'
+                f'<circle cx="{dot_spacing/2}" cy="{dot_spacing/2}" r="0.8" fill="{fg}"/>'
+                f'</pattern>'
+            )
     return lines
 
 
@@ -1564,6 +1670,17 @@ def _merge_shape_with_master(shape: dict, masters: dict,
     if not shape.get("foreign_data") and master_sd.get("foreign_data"):
         shape["foreign_data"] = master_sd["foreign_data"]
 
+    # Fix black blob stencils: inherit line/fill styles from master
+    # when the instance has no explicit style override
+    for style_cell in ("LinePattern", "FillPattern", "LineColor", "FillForegnd",
+                        "FillBkgnd", "LineWeight"):
+        inst_cell = shape["cells"].get(style_cell, {})
+        master_cell = master_sd.get("cells", {}).get(style_cell, {})
+        if master_cell and master_cell.get("V"):
+            # If instance has Inh formula or empty value, use master's
+            if not inst_cell.get("V") or inst_cell.get("F") == "Inh":
+                shape["cells"][style_cell] = master_cell
+
     return shape
 
 
@@ -1906,8 +2023,20 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
                 "dir": grad_angle, "radial": is_radial
             }
             fill = f"url(#{grad_id})"
+    elif 2 <= fill_pat_int <= 24:
+        # Hatching/pattern fill
+        pat_id = f"fpat_{shape['id']}_{fill_pat_int}"
+        fg_color = fill_foregnd or "#333333"
+        bg_color = fill_bkgnd or "#FFFFFF"
+        if _is_black(fg_color) and _is_black(bg_color):
+            bg_color = "#FFFFFF"
+        gradients[f"__pat__{pat_id}"] = {
+            "fg": fg_color, "bg": bg_color, "type": fill_pat_int,
+            "_is_pattern": True,
+        }
+        fill = f"url(#{pat_id})"
     elif fill_pat_int >= 2:
-        # Pattern/texture fill — approximate with blend
+        # Unknown pattern — approximate with blend
         if fill_bkgnd and not _is_black(fill_bkgnd):
             fill = fill_bkgnd
         elif fill_foregnd and not _is_black(fill_foregnd):
@@ -2038,6 +2167,11 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
                 f'</clipPath></defs>'
             )
             clip_attr = f' clip-path="url(#{clip_id})"'
+        # For nested groups, apply coordinate space scaling
+        # Group's children are positioned in the group's local coordinate system
+        # which may differ from the page coordinate system
+        group_w_local = _get_cell_float(shape, "Width")  # May differ from rendered size
+        group_h_local = abs(h_inch)
         lines.append(
             f'<g transform="{transform}"{clip_attr}{shadow_attr}>'
         )
@@ -2254,24 +2388,59 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
                     + '/>'
                 )
         else:
-            # No geometry — simple straight line
-            lines.append(
-                f'<line x1="{bx:.2f}" y1="{by:.2f}" x2="{ex_px:.2f}" y2="{ey_px:.2f}" '
-                f'stroke="{stroke}" stroke-width="{stroke_width:.2f}"'
-                + (f' stroke-dasharray="{dash_array}"' if dash_array else '')
-                + marker_attrs
-                + '/>'
-            )
+            # No geometry — use orthogonal routing if endpoints differ in both axes
+            dx = abs(ex_px - bx)
+            dy = abs(ey_px - by)
+            # Only route orthogonally when both dx and dy are significant
+            # (i.e., not already horizontal or vertical)
+            if dx > 5 and dy > 5:
+                # Simple L-shaped or Z-shaped orthogonal route
+                # Determine routing direction based on layout
+                mid_y = (by + ey_px) / 2
+                path_d = (
+                    f"M {bx:.2f} {by:.2f} "
+                    f"L {bx:.2f} {mid_y:.2f} "
+                    f"L {ex_px:.2f} {mid_y:.2f} "
+                    f"L {ex_px:.2f} {ey_px:.2f}"
+                )
+                lines.append(
+                    f'<path d="{path_d}" fill="none" stroke="{stroke}" '
+                    f'stroke-width="{stroke_width:.2f}"'
+                    + (f' stroke-dasharray="{dash_array}"' if dash_array else '')
+                    + marker_attrs
+                    + ' stroke-linejoin="round"/>'
+                )
+            else:
+                # Straight line for horizontal/vertical connectors
+                lines.append(
+                    f'<line x1="{bx:.2f}" y1="{by:.2f}" x2="{ex_px:.2f}" y2="{ey_px:.2f}" '
+                    f'stroke="{stroke}" stroke-width="{stroke_width:.2f}"'
+                    + (f' stroke-dasharray="{dash_array}"' if dash_array else '')
+                    + marker_attrs
+                    + '/>'
+                )
 
     elif has_geometry:
         # 2D shape with geometry
         master_w = shape.get("_master_w", 0.0)
         master_h = shape.get("_master_h", 0.0)
-        for geo in shape["geometry"]:
-            path_d = _geometry_to_path(geo, w_inch, h_inch, master_w, master_h)
-            if not path_d:
-                continue
 
+        # Check if shape is a simple rectangle with rounding
+        _is_simple_rect = (
+            rounding > 0.5 and len(shape["geometry"]) == 1
+            and not shape["geometry"][0].get("no_show")
+        )
+        if _is_simple_rect:
+            rows = shape["geometry"][0].get("rows", [])
+            row_types = [r["type"] for r in rows]
+            # Simple rect: MoveTo + 4 LineTo (+ close) or RelMoveTo + RelLineTo
+            _is_simple_rect = (
+                len(rows) >= 5
+                and row_types[0] in ("MoveTo", "RelMoveTo")
+                and all(t in ("LineTo", "RelLineTo") for t in row_types[1:5])
+            )
+
+        for geo in shape["geometry"]:
             geo_fill = fill
             geo_stroke = stroke
             if geo.get("no_fill"):
@@ -2289,6 +2458,21 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
                 geo_style += f' stroke-opacity="{stroke_opacity:.2f}"'
             if dash_array:
                 geo_style += f' stroke-dasharray="{dash_array}"'
+
+            # For simple rectangles with rounding, emit <rect rx="...">
+            if _is_simple_rect:
+                rx_val = min(rounding, w_px / 2, h_px / 2)
+                lines.append(
+                    f'<rect x="0" y="0" width="{w_px:.2f}" height="{h_px:.2f}" '
+                    f'rx="{rx_val:.2f}" ry="{rx_val:.2f}" '
+                    f'{geo_style}{shadow_attr} transform="{transform}"/>'
+                )
+                _is_simple_rect = False  # Only emit once
+                continue
+
+            path_d = _geometry_to_path(geo, w_inch, h_inch, master_w, master_h)
+            if not path_d:
+                continue
 
             lines.append(
                 f'<path d="{path_d}" {geo_style}{shadow_attr} '
@@ -3503,8 +3687,20 @@ def _shapes_to_svg(shapes: list[dict], page_w: float, page_h: float,
         for ml in marker_lines:
             if ml.strip() not in ("<defs>", "</defs>"):
                 defs_content.append(ml)
-    if gradients:
-        defs_content.extend(_gradient_defs(gradients))
+    # Separate fill patterns from gradients
+    fill_patterns = {}
+    real_gradients = {}
+    for gid, g in gradients.items():
+        if g.get("_is_pattern"):
+            # Extract the actual pattern ID (remove __pat__ prefix)
+            real_pid = gid.replace("__pat__", "")
+            fill_patterns[real_pid] = g
+        else:
+            real_gradients[gid] = g
+    if fill_patterns:
+        defs_content.extend(_fill_pattern_defs(fill_patterns))
+    if real_gradients:
+        defs_content.extend(_gradient_defs(real_gradients))
     if has_shadow:
         defs_content.append(_shadow_filter_def())
 
