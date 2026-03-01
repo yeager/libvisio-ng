@@ -7,7 +7,7 @@ from pathlib import Path
 from libvisio_ng import __version__, convert, get_page_info, extract_text
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="visio2svg",
         description="Convert Microsoft Visio files to SVG",

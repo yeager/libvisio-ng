@@ -1,6 +1,10 @@
 # libvisio-ng
 
 [![CI](https://github.com/yeager/libvisio-ng/actions/workflows/ci.yml/badge.svg)](https://github.com/yeager/libvisio-ng/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/libvisio-ng)](https://pypi.org/project/libvisio-ng/)
+[![Python](https://img.shields.io/pypi/pyversions/libvisio-ng)](https://pypi.org/project/libvisio-ng/)
+[![Documentation](https://readthedocs.org/projects/libvisio-ng/badge/?version=latest)](https://libvisio-ng.readthedocs.io/en/latest/)
+[![License](https://img.shields.io/pypi/l/libvisio-ng)](https://github.com/yeager/libvisio-ng/blob/main/LICENSE)
 
 A Python library for parsing and converting Microsoft Visio files to SVG.
 
@@ -84,6 +88,17 @@ visio2svg text diagram.vsdx
 | Visio Drawing (Binary) | .vsd | ✅ Native (olefile) |
 | Visio Template (Binary) | .vst | ✅ Native (olefile) |
 | Visio Stencil (Binary) | .vss | ✅ Native (olefile) |
+
+## Documentation
+
+Full documentation is available at [libvisio-ng.readthedocs.io](https://libvisio-ng.readthedocs.io/).
+
+To build docs locally:
+
+```bash
+pip install sphinx sphinx-rtd-theme
+cd docs && make html
+```
 
 ## Architecture
 

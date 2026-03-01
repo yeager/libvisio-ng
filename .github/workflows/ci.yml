@@ -18,4 +18,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
       - run: pip install -e ".[dev]"
-      - run: python -m pytest tests/ -v
+      - run: python -m pytest tests/ -v -m "not slow"
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" mypy
+      - run: python -m mypy src/libvisio_ng/

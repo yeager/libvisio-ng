@@ -49,5 +49,24 @@ visio2svg = "libvisio_ng.cli:main"
 where = ["src"]
 include = ["libvisio_ng*"]
 
+[tool.setuptools.package-data]
+libvisio_ng = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "libvisio_ng._converter"
+# Large legacy module — gradually adding type hints
+disallow_untyped_defs = false
+warn_return_any = false
+check_untyped_defs = false

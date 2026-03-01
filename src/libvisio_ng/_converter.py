@@ -206,9 +206,9 @@ def _resolve_color(val: str, theme_colors: dict[str, str] | None = None) -> str:
             # THEMEGUARD(THEMEVAL(...))
             m2 = re.search(r'THEMEVAL\s*\(\s*(\d+)', val, re.IGNORECASE)
             if m2:
-                idx = m2.group(1)
+                idx = m2.group(1) # type: ignore[assignment]
                 if idx in theme_colors:
-                    return theme_colors[idx]
+                    return theme_colors[idx] # type: ignore[index]
         return ""
 
     if val == "Inh" or val.startswith("=") or "THEME" in val:
@@ -969,7 +969,7 @@ def _parse_master_shapes(zf: zipfile.ZipFile) -> dict[str, dict]:
 
 def _parse_single_shape(shape_elem: ET.Element) -> dict:
     """Parse a single <Shape> element into a rich dict."""
-    sd = {
+    sd: dict = {
         "id": shape_elem.get("ID", ""),
         "name": shape_elem.get("Name", ""),
         "name_u": shape_elem.get("NameU", ""),
@@ -1133,8 +1133,8 @@ def _parse_geometry_section(section: ET.Element) -> dict:
             n = cell.get("N", "")
             v = cell.get("V", "")
             f = cell.get("F", "")
-            row_data["cells"][n] = {"V": v, "F": f}
-        geo["rows"].append(row_data)
+            row_data["cells"][n] = {"V": v, "F": f} # type: ignore[index]
+        geo["rows"].append(row_data) # type: ignore[attr-defined]
 
     # Store section IX for merging
     geo["ix"] = section.get("IX", "0")
@@ -1758,7 +1758,7 @@ def _parse_nurbs_formula(e_val: str, cx: float, cy: float,
 def _parse_polyline_formula(formula: str, w: float, h: float) -> list[tuple[float, float]]:
     """Parse a POLYLINE formula to extract points."""
     # Format: POLYLINE(0, 0, x1, y1, x2, y2, ...)
-    pts = []
+    pts: list = []
     m = re.match(r"POLYLINE\s*\((.*)\)", formula, re.IGNORECASE)
     if not m:
         return pts
@@ -2116,7 +2116,7 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
     if has_shadow is None:
         has_shadow = set()
 
-    lines = []
+    lines: list[str] = []
     # text_layer collects text SVG to render on top of all geometry
     # Only collect for top-level shapes (depth 0); sub-shapes render
     # text within their group transform to get correct positioning
@@ -2547,7 +2547,7 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
         # for groups — sub-shapes already provide visible content)
         if shape["text"]:
             if _collect_text:
-                _append_text_svg(text_layer, shape, page_h, w_px, h_px, theme_colors)
+                _append_text_svg(text_layer, shape, page_h, w_px, h_px, theme_colors) # type: ignore[arg-type]
             else:
                 _append_text_svg(lines, shape, page_h, w_px, h_px, theme_colors)
         return lines
@@ -2862,7 +2862,7 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
     # --- Text rendering ---
     if shape["text"]:
         if _collect_text:
-            _append_text_svg(text_layer, shape, page_h, w_px, h_px, theme_colors)
+            _append_text_svg(text_layer, shape, page_h, w_px, h_px, theme_colors) # type: ignore[arg-type]
         else:
             _append_text_svg(lines, shape, page_h, w_px, h_px, theme_colors)
 
@@ -3239,7 +3239,7 @@ def _append_text_svg(lines: list, shape: dict, page_h: float,
         # Multi-format text: render each part as a tspan with per-run styling
         # Split text_parts into lines, preserving formatting across line breaks
         formatted_lines = []  # list of [(text, cp, pp), ...]
-        current_line_parts = []
+        current_line_parts: list = []
         for part in text_parts:
             part_text = part.get("text", "")
             if not part_text:
@@ -3541,7 +3541,7 @@ def _parse_all_page_dimensions(zf: zipfile.ZipFile) -> list[tuple[float, float]]
 
 def _parse_connects(page_xml_root: ET.Element) -> list[dict]:
     """Parse <Connect> elements from a page XML root."""
-    connects = []
+    connects: list[dict] = []
     connects_el = page_xml_root.find(f"{_VTAG}Connects")
     if connects_el is None:
         return connects
@@ -3716,7 +3716,7 @@ def _parse_vsdx_shapes(page_xml: bytes, master_texts: dict | None = None,
         master_texts: Legacy param (ignored, kept for API compat).
         masters: Full master shapes dict from _parse_master_shapes.
     """
-    shapes = []
+    shapes: list[dict] = []
     try:
         root = ET.fromstring(page_xml)
     except ET.ParseError:
@@ -3776,7 +3776,7 @@ def _avoid_text_collisions(text_elements: list[str]) -> list[str]:
         else:
             box_x = tx - est_w / 2 - 1
         box_y = ty - est_h * 0.55
-        parsed.append((elem, {
+        parsed.append((elem, { # type: ignore[arg-type]
             "tx": tx, "ty": ty, "fs": fs, "orig_y": m.group(2),
             "clean_txt": clean_txt, "est_w": est_w, "est_h": est_h,
             "box_x": box_x, "box_y": box_y,
@@ -3806,8 +3806,8 @@ def _avoid_text_collisions(text_elements: list[str]) -> list[str]:
                 _new_fs_str = f'font-size="{data["fs"]:.2f}'
                 parsed[i] = (elem.replace(_orig_fs_str, _new_fs_str, 1), data)
 
-    placed_boxes = []  # list of (x, y, w, h)
-    collided_indices = set()  # track which texts actually collided
+    placed_boxes: list[tuple[float, float, float, float]] = []
+    collided_indices: set[int] = set()
     result = []
 
     for idx, (elem, data) in enumerate(parsed):
@@ -4374,7 +4374,7 @@ def get_page_info(input_path: str) -> list[dict]:
     Returns list of dicts: [{"name": "Page-1", "shapes": [...], "index": 0}, ...]
     """
     ext = Path(input_path).suffix.lower()
-    pages = []
+    pages: list[dict] = []
 
     if ext in _XML_EXTENSIONS:
         if not zipfile.is_zipfile(input_path):
@@ -4542,7 +4542,19 @@ def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -
                     except (KeyError, ET.ParseError):
                         pass
 
-            # Merge master_rels into page_rels for image resolution
+            # Merge master rels into page_rels for image resolution
+            master_rels: dict[str, str] = {}
+            for mname in zf.namelist():
+                if "masters/" in mname and mname.endswith(".rels"):
+                    try:
+                        mrels_root = ET.fromstring(zf.read(mname))
+                        for rel in mrels_root:
+                            rid = rel.get("Id", "")
+                            target = rel.get("Target", "")
+                            if rid and target:
+                                master_rels[rid] = target
+                    except ET.ParseError:
+                        pass
             all_rels = dict(master_rels)
             all_rels.update(page_rels)
             svg_content = _shapes_to_svg(

@@ -361,17 +361,17 @@ def _read_pointer(data, offset):
 class VsdParser:
     """Parse a .vsd binary Visio file."""
 
-    def __init__(self, data):
+    def __init__(self, data: bytes) -> None:
         self.data = data
         self.doc = VsdDocument()
         self._current_page = None
         self._current_shape = None
         self._current_geom = None
-        self._shape_stack = []  # for nested groups
+        self._shape_stack: list[VsdShape] = []  # for nested groups
         self._current_level = 0
         self._page_is_background = False
 
-    def parse(self):
+    def parse(self) -> VsdDocument:
         try:
             import olefile
         except ImportError:
@@ -1367,7 +1367,7 @@ def _vsd_shape_to_dict(shape):
     }
 
 
-def parse_vsd_file(file_path):
+def parse_vsd_file(file_path: str | Path) -> VsdDocument:
     """Parse a .vsd file and return a VsdDocument."""
     path = Path(file_path)
     if not path.exists():
@@ -1377,7 +1377,7 @@ def parse_vsd_file(file_path):
     return parser.parse()
 
 
-def parse_vsd_to_dicts(file_path):
+def parse_vsd_to_dicts(file_path: str | Path) -> list[dict]:
     """Parse a .vsd file and return page data compatible with the VSDX SVG renderer.
 
     Returns list of dicts with page_width, page_height, shapes, name.
