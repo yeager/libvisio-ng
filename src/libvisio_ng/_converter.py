@@ -987,6 +987,7 @@ def _parse_single_shape(shape_elem: ET.Element) -> dict:
         "connections": {},    # IX -> {X, Y, ...}
         "user": {},           # User-defined cells (e.g., msvStructureType)
         "foreign_data": None, # ForeignData info for embedded images
+        "hyperlinks": [],    # List of {description, address, sub_address, frame}
         "line_style": shape_elem.get("LineStyle", ""),
         "fill_style": shape_elem.get("FillStyle", ""),
         "text_style": shape_elem.get("TextStyle", ""),
@@ -1086,6 +1087,25 @@ def _parse_single_shape(shape_elem: ET.Element) -> dict:
     fd_info = _parse_foreign_data(shape_elem)
     if fd_info:
         sd["foreign_data"] = fd_info
+
+    # Parse hyperlinks (cross-page references, external links)
+    for section in shape_elem.findall(f"{_VTAG}Section"):
+        if section.get("N") == "Hyperlink":
+            for row in section.findall(f"{_VTAG}Row"):
+                link = {}
+                for cell in row.findall(f"{_VTAG}Cell"):
+                    n = cell.get("N", "")
+                    v = cell.get("V", "")
+                    if n == "Description":
+                        link["description"] = v
+                    elif n == "Address":
+                        link["address"] = v
+                    elif n == "SubAddress":
+                        link["sub_address"] = v
+                    elif n == "Frame":
+                        link["frame"] = v
+                if link:
+                    sd["hyperlinks"].append(link)
 
     return sd
 
