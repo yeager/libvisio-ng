@@ -1,0 +1,5 @@
+libvisio-ng (0.6.0-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #1129380)
+
+ -- Daniel Nylander <daniel@danielnylander.se>  Sun, 01 Mar 2026 18:00:00 +0100
