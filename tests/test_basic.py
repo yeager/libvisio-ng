@@ -1,3 +1,4 @@
+import sys
 """Basic tests for libvisio-ng."""
 
 import os
@@ -257,6 +258,7 @@ def test_parse_text_element():
     assert "1" in cps
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")
 def test_version_consistency():
     """Version in __init__.py matches pyproject.toml."""
     import libvisio_ng
