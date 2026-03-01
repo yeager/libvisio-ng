@@ -1,5 +1,7 @@
 # libvisio-ng
 
+[![CI](https://github.com/yeager/libvisio-ng/actions/workflows/ci.yml/badge.svg)](https://github.com/yeager/libvisio-ng/actions/workflows/ci.yml)
+
 A Python library for parsing and converting Microsoft Visio files to SVG.
 
 **Native support for both `.vsdx` (XML) and `.vsd` (binary) formats** — no external C++ dependencies required.
