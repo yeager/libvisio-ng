@@ -265,3 +265,70 @@ def test_version_consistency():
     with open(toml_path, "rb") as f:
         data = tomllib.load(f)
     assert libvisio_ng.__version__ == data["project"]["version"]
+
+
+def test_group_dimension_fallback_from_master_subs():
+    """When a group has Width=0 Height=0 and sub-shapes have no cells,
+    the renderer should estimate group dimensions from master sub-shapes."""
+    from libvisio_ng._converter import _render_shape_svg
+
+    # Build a minimal group shape with zero dimensions and empty sub-shapes
+    masters = {
+        "99": {
+            "500": {
+                "id": "500", "type": "Group", "geometry": [],
+                "cells": {"Width": {"V": "2.0", "F": ""},
+                           "Height": {"V": "3.0", "F": ""}},
+                "sub_shapes": [],
+                "text": [], "connections": [],
+            },
+            "10": {
+                "id": "10", "type": "Shape", "geometry": [],
+                "cells": {"PinX": {"V": "0.5", "F": ""},
+                           "PinY": {"V": "1.0", "F": ""},
+                           "Width": {"V": "0.2", "F": ""},
+                           "Height": {"V": "0.1", "F": ""}},
+                "text": [], "connections": [],
+            },
+            "11": {
+                "id": "11", "type": "Shape", "geometry": [],
+                "cells": {"PinX": {"V": "1.5", "F": ""},
+                           "PinY": {"V": "2.5", "F": ""},
+                           "Width": {"V": "0.2", "F": ""},
+                           "Height": {"V": "0.1", "F": ""}},
+                "text": [], "connections": [],
+            },
+        }
+    }
+
+    _empty_shape_fields = {
+        "geometry": [], "text": [], "connections": [],
+        "text_parts": [], "char_formats": [], "para_formats": [],
+        "tab_stops": [], "user": {}, "foreign_data": None,
+        "name_u": "", "name": "",
+    }
+
+    group_shape = {
+        "id": "900", "type": "Group", "master": "99",
+        "cells": {
+            "PinX": {"V": "5.0", "F": ""},
+            "PinY": {"V": "5.0", "F": ""},
+            "Width": {"V": "0", "F": ""},
+            "Height": {"V": "0", "F": ""},
+            "LocPinX": {"V": "0", "F": ""},
+            "LocPinY": {"V": "0", "F": ""},
+        },
+        **_empty_shape_fields,
+        "sub_shapes": [
+            {"id": "901", "type": "Shape", "master_shape": "10",
+             "cells": {}, **_empty_shape_fields, "sub_shapes": []},
+            {"id": "902", "type": "Shape", "master_shape": "11",
+             "cells": {}, **_empty_shape_fields, "sub_shapes": []},
+        ],
+    }
+
+    # Render — should NOT crash and should produce a group with some content
+    svg_lines = _render_shape_svg(group_shape, 11.0, masters, "")
+    svg = "\n".join(svg_lines)
+    # Should contain a group transform (not collapsed to origin)
+    assert "<g transform=" in svg

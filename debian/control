@@ -1,0 +1,27 @@
+Source: libvisio-ng
+Section: python
+Priority: optional
+Maintainer: Daniel Nylander <po@danielnylander.se>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all,
+               python3-setuptools,
+               python3-olefile,
+               pybuild-plugin-pyproject,
+Standards-Version: 4.7.0
+Homepage: https://github.com/yeager/libvisio-ng
+Vcs-Git: https://github.com/yeager/libvisio-ng.git
+Vcs-Browser: https://github.com/yeager/libvisio-ng
+Rules-Requires-Root: no
+
+Package: python3-libvisio-ng
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Description: Pure-Python parser for Microsoft Visio files (.vsdx/.vsd)
+ libvisio-ng is a pure-Python library for parsing Microsoft Visio files
+ in both modern XML (.vsdx) and legacy binary (.vsd) formats. It
+ supports themes, gradients, shadows, hatching, connectors, master
+ shapes, NURBS, splines, embedded images, and layers.
+ .
+ It surpasses the C++ libvisio in feature coverage and is actively
+ maintained. It includes a visio2svg command-line converter.

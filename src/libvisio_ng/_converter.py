@@ -2437,17 +2437,39 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
         # Group's local coordinate system uses its own Width x Height
         group_h = h_inch
 
-        # If group has no Height, estimate from sub-shapes
-        if abs(group_h) < 1e-6 and shape.get("sub_shapes"):
+        # If group has no Width/Height, estimate from sub-shapes.
+        # Sub-shapes may not yet be merged with master, so also check
+        # corresponding master sub-shapes for PinX/PinY/Width/Height.
+        if (abs(group_h) < 1e-6 or abs(w_inch) < 1e-6) and shape.get("sub_shapes"):
+            master_shapes_map = masters.get(group_master_id, {}) if masters else {}
+            max_sub_x = 0.0
             max_sub_y = 0.0
             for sub in shape["sub_shapes"]:
-                sub_py = _safe_float(sub.get("cells", {}).get("PinY", {}).get("V"))
-                sub_h = abs(_safe_float(sub.get("cells", {}).get("Height", {}).get("V")))
+                sub_cells = sub.get("cells", {})
+                # Try page sub-shape cells first, fall back to master
+                sub_px = _safe_float(sub_cells.get("PinX", {}).get("V"))
+                sub_py = _safe_float(sub_cells.get("PinY", {}).get("V"))
+                sub_w = abs(_safe_float(sub_cells.get("Width", {}).get("V")))
+                sub_h = abs(_safe_float(sub_cells.get("Height", {}).get("V")))
+                if sub_px == 0.0 and sub_py == 0.0 and not sub_cells:
+                    # Sub-shape has no cells — look up master sub-shape
+                    ms_id = sub.get("master_shape", "")
+                    ms = master_shapes_map.get(ms_id)
+                    if ms:
+                        mc = ms.get("cells", {})
+                        sub_px = _safe_float(mc.get("PinX", {}).get("V"))
+                        sub_py = _safe_float(mc.get("PinY", {}).get("V"))
+                        sub_w = abs(_safe_float(mc.get("Width", {}).get("V")))
+                        sub_h = abs(_safe_float(mc.get("Height", {}).get("V")))
+                max_sub_x = max(max_sub_x, sub_px + sub_w / 2)
                 max_sub_y = max(max_sub_y, sub_py + sub_h / 2)
-            if max_sub_y > 0:
+            if max_sub_y > 0 and abs(group_h) < 1e-6:
                 group_h = max_sub_y
                 h_inch = group_h
                 h_px = abs(group_h) * _INCH_TO_PX
+            if max_sub_x > 0 and abs(w_inch) < 1e-6:
+                w_inch = max_sub_x
+                w_px = abs(w_inch) * _INCH_TO_PX
 
         # Apply clipping only for large groups (containers/swimlanes),
         # not for small stencil/icon groups where sub-shapes may extend
