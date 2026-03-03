@@ -1,5 +1,19 @@
+<<<<<<< HEAD
 libvisio-ng (0.6.0-1) unstable; urgency=low
 
   * Initial release. (Closes: #XXXXXX)
 
  -- Daniel Nylander <po@danielnylander.se>  Sun, 01 Mar 2026 17:14:00 +0100
+=======
+libvisio-ng (0.6.0-2) unstable; urgency=medium
+
+  * Re-upload to mentors. (Closes: #1129380)
+
+ -- Daniel Nylander <daniel@danielnylander.se>  Sun, 01 Mar 2026 18:30:00 +0100
+
+libvisio-ng (0.6.0-1) unstable; urgency=medium
+
+  * Initial release.
+
+ -- Daniel Nylander <daniel@danielnylander.se>  Sun, 01 Mar 2026 18:17:00 +0100
+>>>>>>> c6d580fce9ac6ce63dfd19db26de6a4fef34a3b7
