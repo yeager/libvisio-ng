@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libvisio-ng"
-version = "0.6.0"
+version = "0.6.1"
 description = "A Python library for parsing Microsoft Visio files (.vsdx, .vsd) — native support for both XML and binary formats"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
