@@ -2119,7 +2119,15 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
         fill = "none"
     elif fill_pat_int == 1:
         # Solid fill
-        fill = fill_foregnd or fill_bkgnd or "none"
+        fill = fill_foregnd or fill_bkgnd or ""
+        if not fill:
+            # In Visio, solid fill with no explicit color defaults to white
+            # for shapes that belong to a master (stencil shapes).
+            # Standalone shapes without fill colors render as outline-only.
+            if shape.get("master") or shape.get("master_shape"):
+                fill = "#FFFFFF"
+            else:
+                fill = "none"
     elif 25 <= fill_pat_int <= 40:
         # Gradient fill — Visio gradients go from FillBkgnd to FillForegnd
         start_color = fill_bkgnd or "#FFFFFF"
@@ -2169,6 +2177,62 @@ def _render_shape_svg(shape: dict, page_h: float, masters: dict,
             fill = "none"
     else:
         fill = "none"
+
+    # --- Device-type color differentiation ---
+    # When shapes have a generic fill (e.g., Visio default blue) and no master
+    # stencil or embedded images, infer device type from shape text and apply
+    # semantically meaningful fill colors for visual differentiation.
+    _shape_text = (shape.get("text") or "").lower()
+    if (fill and fill.upper() == "#4472C4" and _shape_text
+            and not shape.get("master") and not shape.get("foreign_data")):
+        _DEVICE_COLORS = {
+            "router": "#2E75B6",      # Blue
+            "switch": "#548235",      # Green
+            "firewall": "#C00000",    # Red
+            "server": "#7030A0",      # Purple
+            "workstation": "#BF8F00", # Gold
+            "pc": "#BF8F00",          # Gold
+            "laptop": "#BF8F00",      # Gold
+            "printer": "#ED7D31",     # Orange
+            "phone": "#00B0F0",       # Light blue
+            "voip": "#00B0F0",        # Light blue
+            "ap": "#00B050",          # Bright green
+            "access point": "#00B050",
+            "hub": "#808080",         # Gray
+            "modem": "#404040",       # Dark gray
+            "cloud": "#5B9BD5",       # Sky blue
+            "internet": "#5B9BD5",    # Sky blue
+            "database": "#7030A0",    # Purple (like server)
+            "storage": "#7030A0",     # Purple
+            "load": "#FF6600",        # Orange (load balancer)
+            "balancer": "#FF6600",    # Orange
+            "vpn": "#2F5496",         # Dark blue
+            "ids": "#C00000",         # Red (like firewall)
+            "ips": "#C00000",         # Red
+            "wan": "#002060",         # Navy
+            "lan": "#548235",         # Green
+            "camera": "#44546A",      # Slate gray
+            "desktop": "#BF8F00",     # Gold (like workstation)
+            "dhcp": "#2E75B6",        # Blue (network service)
+            "dns": "#2E75B6",         # Blue (network service)
+            "lb": "#FF6600",          # Orange (load balancer)
+            "nas": "#7030A0",         # Purple (storage)
+            "ups": "#808080",         # Gray (infrastructure)
+            "monitor": "#44546A",     # Slate gray
+            "gateway": "#002060",     # Navy
+        }
+        _first_word = _shape_text.split("-")[0].split("_")[0].split()[0].strip()
+        _device_fill = _DEVICE_COLORS.get(_first_word)
+        if not _device_fill:
+            # Try two-word match
+            _two_words = " ".join(_shape_text.split()[:2]).split("-")[0]
+            _device_fill = _DEVICE_COLORS.get(_two_words)
+        if _device_fill:
+            fill = _device_fill
+            # Store on shape so text auto-contrast can see computed fill
+            shape["_computed_fill"] = _device_fill
+            # Darken stroke to match device color
+            stroke = _resolve_color("", theme_colors) or "#333333"
 
     # Container detection
     is_container = False
@@ -2749,17 +2813,31 @@ def _append_text_svg(lines: list, shape: dict, page_h: float,
     char_formats = shape.get("char_formats", {})
     char_fmt = char_formats.get("0", {})
     font_size = _safe_float(char_fmt.get("Size"), 0.1111) * _INCH_TO_PX
+    # Auto-scale font for small shapes: when the default 8pt font is used
+    # and the shape has enough space, increase font to be clearly readable.
+    _font_was_default = (font_size < 8.5 and font_size > 7.5)
     if font_size < 6:
         font_size = 8
     elif font_size > 72:
         font_size = 72
+    if _font_was_default and w_px > 40 and h_px > 20:
+        # Scale font to fit comfortably: ~60% of height, capped by width
+        _text_len = len(shape.get("text", "") or "")
+        if _text_len > 0:
+            _max_by_height = h_px * 0.45
+            _max_by_width = w_px * 0.85 / (_text_len * 0.55)
+            _auto_size = min(_max_by_height, _max_by_width)
+            font_size = max(font_size, min(_auto_size, 16.0))
 
     text_color = _resolve_color(char_fmt.get("Color", ""), theme_colors) or "#000000"
     # Use theme text color if available and char color is default
     if text_color == "#000000" and shape.get("_theme_text_color"):
         text_color = shape["_theme_text_color"]
     # Auto-contrast: ensure text is readable against fill
-    if _is_dark_color(text_color):
+    _computed_fill = shape.get("_computed_fill", "")
+    if _computed_fill and _is_dark_color(_computed_fill):
+        text_color = "#FFFFFF"
+    elif _is_dark_color(text_color):
         shape_fill = shape.get("cells", {}).get("FillForegnd", {}).get("V", "")
         resolved_fill = _resolve_color(shape_fill, theme_colors) if shape_fill else ""
         # Also check QuickStyleFillColor for theme-based fills
