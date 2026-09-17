@@ -49,7 +49,7 @@ def main() -> None:
     elif args.command == "info":
         pages = get_page_info(args.input)
         for i, p in enumerate(pages):
-            print(f"Page {i}: {p.get('name', 'Unnamed')} ({p.get('width', '?')}x{p.get('height', '?')})")
+            print(f"Page {i}: {p.get('name', 'Unnamed')} ({p.get('page_w', '?')}x{p.get('page_h', '?')})")
     elif args.command == "text":
         print(extract_text(args.input))
     else:

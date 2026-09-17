@@ -4257,7 +4257,13 @@ def convert_vsd_to_svg(input_path: str, output_dir: str | None = None) -> list[s
 
 
 def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -> str | None:
-    """Convert a specific page of a Visio file to SVG. Returns SVG path or None."""
+    """Convert a specific page of a Visio file to SVG. Returns SVG path or None.
+
+    Page indices are zero-based; negative and out-of-range indices return None.
+    """
+    if page_index < 0:
+        return None
+    os.makedirs(output_dir, exist_ok=True)
     ext = Path(input_path).suffix.lower()
     basename = Path(input_path).stem
 

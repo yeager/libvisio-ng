@@ -17,7 +17,7 @@ Example usage:
     text = extract_text("diagram.vsdx")
 """
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 from libvisio_ng._converter import (
     convert_vsd_to_svg as convert,

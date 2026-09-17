@@ -1,3 +1,12 @@
+# 0.7.1 — 2026-09-17
+
+- Reject negative single-page indices instead of selecting from the end of the document.
+- Create nested output directories for single-page conversion.
+- Display actual page dimensions in CLI info output.
+- Add four regression tests.
+
+Validation: full Python test suite (151 tests).
+
 # Changelog
 
 ## 0.6.0 (2025-02-28)
