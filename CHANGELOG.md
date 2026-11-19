@@ -1,3 +1,7 @@
+# 0.7.2 — 2026-11-19
+
+- Follow the Visio page catalog and relationships for page order, preserve empty pages, and expose page layers with per-page visibility overrides.
+
 # 0.7.1 — 2026-09-17
 
 - Reject negative single-page indices instead of selecting from the end of the document.

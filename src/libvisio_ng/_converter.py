@@ -13,6 +13,7 @@ import math
 import mimetypes
 import os
 import re
+import posixpath
 import shutil
 import subprocess
 import tempfile
@@ -3698,7 +3699,8 @@ def _shapes_to_svg(shapes: list[dict], page_w: float, page_h: float,
                    bg_connects: list[dict] | None = None,
                    output_dir: str | None = None,
                    theme_colors: dict | None = None,
-                   layers: dict | None = None) -> str:
+                   layers: dict | None = None, *,
+                   background_layers: dict | None = None) -> str:
     """Generate SVG string from parsed shapes."""
     ET.register_namespace("", "http://www.w3.org/2000/svg")
     ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
@@ -3802,7 +3804,7 @@ def _shapes_to_svg(shapes: list[dict], page_w: float, page_h: float,
                 s, page_h, masters, media=media,
                 page_rels=page_rels, used_markers=used_markers,
                 output_dir=output_dir, theme_colors=theme_colors,
-                layers=layers, gradients=gradients, has_shadow=has_shadow,
+                layers=background_layers, gradients=gradients, has_shadow=has_shadow,
                 text_layer=text_layer)
             svg_lines.extend(svg_elements)
         if bg_connects:
@@ -3995,21 +3997,66 @@ def _parse_vsdx_page_names(zf: zipfile.ZipFile) -> list[str]:
     return names
 
 
-def _get_page_files(zf: zipfile.ZipFile) -> list[str]:
-    """Get sorted list of page XML files from a ZIP."""
-    page_files = sorted(
-        n for n in zf.namelist()
-        if n.startswith("visio/pages/page") and n.endswith(".xml")
-        and not n.endswith("pages.xml")
+def _page_order(zf: zipfile.ZipFile) -> list[tuple[str, int | None]]:
+    """Resolve catalog entries to ZIP paths, with a numeric fallback."""
+    numbered = re.compile(r"visio/pages/page(\d+)\.xml")
+    candidates = sorted(
+        (name for name in zf.namelist() if numbered.fullmatch(name)),
+        key=lambda name: (int(numbered.fullmatch(name)[1]), name),
     )
-    if not page_files:
-        page_files = sorted(
-            n for n in zf.namelist()
-            if "page" in n.lower() and n.endswith(".xml")
-            and "pages.xml" not in n.lower()
-            and "_rels" not in n
+    if not candidates:
+        candidates = sorted(
+            name for name in zf.namelist()
+            if "page" in name.lower() and name.endswith(".xml")
+            and not name.endswith("pages.xml") and "_rels" not in name
         )
-    return page_files
+    try:
+        catalog = ET.fromstring(zf.read("visio/pages/pages.xml"))
+    except (KeyError, ET.ParseError):
+        return [(name, None) for name in candidates]
+    pages = catalog.findall(f"{_VTAG}Page")
+    try:
+        rels = ET.fromstring(zf.read("visio/pages/_rels/pages.xml.rels"))
+    except (KeyError, ET.ParseError):
+        return [(name, i if i < len(pages) else None) for i, name in enumerate(candidates)]
+    targets = {
+        rel.get("Id"): posixpath.normpath(posixpath.join("visio/pages", target)).lstrip("/")
+        for rel in rels
+        if rel.get("TargetMode") != "External" and (target := rel.get("Target"))
+    }
+    members = set(zf.namelist())
+    ordered = []
+    used = set()
+    for i, page in enumerate(pages):
+        rel = page.find(f"{_VTAG}Rel")
+        if rel is None:
+            continue
+        path = targets.get(rel.get(f"{{{_NS['r']}}}id"))
+        if path and path.startswith("visio/pages/") and path.endswith(".xml") and path in members and path not in used:
+            ordered.append((path, i))
+            used.add(path)
+    if not ordered:
+        return [(name, i if i < len(pages) else None) for i, name in enumerate(candidates)]
+    return ordered + [(name, None) for name in candidates if name not in used]
+
+
+def _get_page_files(zf: zipfile.ZipFile) -> list[str]:
+    return [name for name, _ in _page_order(zf)]
+
+
+def _page_geometry(zf, order):
+    catalog_dims = _parse_all_page_dimensions(zf)
+    index = {catalog_index: i for i, (_, catalog_index) in enumerate(order) if catalog_index is not None}
+    dims = [catalog_dims[i] if i is not None and i < len(catalog_dims) else None for _, i in order]
+    backgrounds = {index[i]: index[j] for i, j in _parse_background_pages(zf).items()
+                   if i in index and j in index}
+    try:
+        root = ET.fromstring(zf.read("visio/pages/pages.xml"))
+        catalog_layers = [_parse_layers(page) for page in root.findall(f"{_VTAG}Page")]
+    except (KeyError, ET.ParseError):
+        catalog_layers = []
+    layers = [catalog_layers[i] if i is not None and i < len(catalog_layers) else {} for _, i in order]
+    return dims, backgrounds, layers
 
 
 def _parse_background_pages(zf: zipfile.ZipFile) -> dict[int, int]:
@@ -4073,9 +4120,9 @@ def _vsdx_to_svg(input_path: str, output_dir: str) -> list[str]:
                             master_rels[rid] = target
                 except (KeyError, ET.ParseError):
                     pass
-        page_files = _get_page_files(zf)
-        all_dims = _parse_all_page_dimensions(zf)
-        bg_map = _parse_background_pages(zf)
+        order = _page_order(zf)
+        page_files = [name for name, _ in order]
+        all_dims, bg_map, catalog_layers = _page_geometry(zf, order)
 
         # Pre-parse all pages for background composition
         # idx -> (shapes, connects, page_rels, layers)
@@ -4097,17 +4144,14 @@ def _vsdx_to_svg(input_path: str, output_dir: str) -> list[str]:
                 page_layers = {}
 
             page_rels = _parse_rels(zf, page_file)
-            page_cache[i] = (shapes, connects, page_rels, page_layers)
+            page_cache[i] = (shapes, connects, page_rels, {**catalog_layers[i], **page_layers})
 
         for i, page_file in enumerate(page_files):
             if i not in page_cache:
                 continue
 
             shapes, connects, page_rels, page_layers = page_cache[i]
-            if not shapes:
-                continue
-
-            if i < len(all_dims):
+            if i < len(all_dims) and all_dims[i] is not None:
                 page_w, page_h = all_dims[i]
             else:
                 try:
@@ -4119,10 +4163,11 @@ def _vsdx_to_svg(input_path: str, output_dir: str) -> list[str]:
             # Background page composition
             bg_shapes = None
             bg_connects = None
+            bg_layers = None
             if i in bg_map:
                 bg_idx = bg_map[i]
                 if bg_idx in page_cache:
-                    bg_shapes, bg_connects, _, _ = page_cache[bg_idx]
+                    bg_shapes, bg_connects, _, bg_layers = page_cache[bg_idx]
 
             # Merge master_rels into page_rels for image resolution
             all_rels = dict(master_rels)
@@ -4130,7 +4175,7 @@ def _vsdx_to_svg(input_path: str, output_dir: str) -> list[str]:
             svg_content = _shapes_to_svg(
                 shapes, page_w, page_h, masters, connects,
                 media, all_rels, bg_shapes, bg_connects, output_dir,
-                theme_colors, page_layers)
+                theme_colors, page_layers, background_layers=bg_layers)
             svg_path = os.path.join(output_dir, f"{basename}_page{i + 1}.svg")
             with open(svg_path, "w", encoding="utf-8") as f:
                 f.write(svg_content)
@@ -4154,19 +4199,23 @@ def get_page_info(input_path: str) -> list[dict]:
         with zipfile.ZipFile(input_path, "r") as zf:
             masters = _parse_master_shapes(zf)
             page_names = _parse_vsdx_page_names(zf)
-            page_files = _get_page_files(zf)
-            all_dims = _parse_all_page_dimensions(zf)
+            order = _page_order(zf)
+            all_dims, _, catalog_layers = _page_geometry(zf, order)
 
-            for i, page_file in enumerate(page_files):
+            for i, (page_file, catalog_index) in enumerate(order):
                 try:
                     page_xml = zf.read(page_file)
                 except (KeyError, zipfile.BadZipFile):
                     continue
 
                 shapes = _parse_vsdx_shapes(page_xml, masters=masters)
-                name = page_names[i] if i < len(page_names) else f"Page {i + 1}"
-                page_w, page_h = all_dims[i] if i < len(all_dims) else _parse_page_dimensions(page_xml)
-                pages.append({"name": name, "shapes": shapes, "index": i,
+                name = page_names[catalog_index] if catalog_index is not None and catalog_index < len(page_names) else ""
+                page_w, page_h = all_dims[i] or _parse_page_dimensions(page_xml)
+                try:
+                    layers = _parse_layers(ET.fromstring(page_xml))
+                except ET.ParseError:
+                    layers = {}
+                pages.append({"name": name or f"Page {i + 1}", "shapes": shapes, "index": i, "layers": {**catalog_layers[i], **layers},
                               "page_w": page_w, "page_h": page_h})
 
     return pages
@@ -4256,7 +4305,8 @@ def convert_vsd_to_svg(input_path: str, output_dir: str | None = None) -> list[s
     )
 
 
-def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -> str | None:
+def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str, *,
+                            layer_visibility: dict[str, bool] | None = None) -> str | None:
     """Convert a specific page of a Visio file to SVG. Returns SVG path or None.
 
     Page indices are zero-based; negative and out-of-range indices return None.
@@ -4279,22 +4329,19 @@ def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -
             media = _extract_media(zf)
             theme_colors = _parse_theme(zf)
             doc_styles = _parse_stylesheets(zf)
-            page_files = _get_page_files(zf)
-            all_dims = _parse_all_page_dimensions(zf)
-            bg_map = _parse_background_pages(zf)
+            order = _page_order(zf)
+            page_files = [name for name, _ in order]
+            all_dims, bg_map, catalog_layers = _page_geometry(zf, order)
             if page_index >= len(page_files):
                 return None
 
             page_file = page_files[page_index]
             page_xml = zf.read(page_file)
-            if page_index < len(all_dims):
+            if page_index < len(all_dims) and all_dims[page_index] is not None:
                 page_w, page_h = all_dims[page_index]
             else:
                 page_w, page_h = _parse_page_dimensions(page_xml)
             shapes = _parse_vsdx_shapes(page_xml, masters=masters)
-            if not shapes:
-                return None
-
             try:
                 page_root = ET.fromstring(page_xml)
                 connects = _parse_connects(page_root)
@@ -4303,11 +4350,16 @@ def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -
                 connects = []
                 page_layers = {}
 
+            page_layers = {**catalog_layers[page_index], **page_layers}
+            for layer, visible in (layer_visibility or {}).items():
+                page_layers.setdefault(layer, {})["visible"] = visible
+
             page_rels = _parse_rels(zf, page_file)
 
             # Background page
             bg_shapes = None
             bg_connects = None
+            bg_layers = None
             if page_index in bg_map:
                 bg_idx = bg_map[page_index]
                 if bg_idx < len(page_files):
@@ -4316,6 +4368,7 @@ def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -
                         bg_shapes = _parse_vsdx_shapes(bg_xml, masters=masters)
                         bg_root = ET.fromstring(bg_xml)
                         bg_connects = _parse_connects(bg_root)
+                        bg_layers = {**catalog_layers[bg_idx], **_parse_layers(bg_root)}
                     except (KeyError, ET.ParseError):
                         pass
 
@@ -4337,7 +4390,7 @@ def convert_vsd_page_to_svg(input_path: str, page_index: int, output_dir: str) -
             svg_content = _shapes_to_svg(
                 shapes, page_w, page_h, masters, connects,
                 media, all_rels, bg_shapes, bg_connects, output_dir,
-                theme_colors, page_layers)
+                theme_colors, page_layers, background_layers=bg_layers)
             svg_path = os.path.join(output_dir, f"{basename}_page{page_index + 1}.svg")
             with open(svg_path, "w", encoding="utf-8") as f:
                 f.write(svg_content)

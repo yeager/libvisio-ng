@@ -1,3 +1,9 @@
+libvisio-ng (0.7.2-1) unstable; urgency=medium
+
+  * Follow the Visio page catalog and relationships for page order, preserve empty pages, and expose page layers with per-page visibility overrides.
+
+ -- Daniel Nylander <daniel@danielnylander.se>  Thu, 19 Nov 2026 08:45:00 +0100
+
 libvisio-ng (0.7.0-1) unstable; urgency=medium
 
   * New upstream release.
